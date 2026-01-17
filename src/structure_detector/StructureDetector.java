@@ -1006,6 +1006,9 @@ public class StructureDetector {
                 sb.append(innerIndent).append("if (!").append(node.getLabel()).append(") {\n");
                 sb.append(innerIndent).append("    break;\n");
                 sb.append(innerIndent).append("}\n");
+            } else if (node.succs.size() == 1) {
+                // Do-while style: header has only 1 successor, output the header as a statement
+                sb.append(innerIndent).append(node.getLabel()).append(";\n");
             }
             
             // Generate body of the loop
@@ -1994,5 +1997,22 @@ public class StructureDetector {
         System.out.println(detector8.toPseudocode());
         System.out.println("--- Graphviz/DOT ---");
         System.out.println(detector8.toGraphviz());
+        
+        // Example 9: Do-while style loop (body first, then condition)
+        // The "body" node should appear in the pseudocode
+        System.out.println("\n===== Example 9: Do-While Style Loop =====");
+        StructureDetector detector9 = StructureDetector.fromGraphviz(
+            "digraph {\n" +
+            "  entry->body;\n" +
+            "  body->cond;\n" +
+            "  cond->body;\n" +
+            "  cond->exit;\n" +
+            "}"
+        );
+        detector9.analyze();
+        System.out.println("\n--- Pseudocode ---");
+        System.out.println(detector9.toPseudocode());
+        System.out.println("--- Graphviz/DOT ---");
+        System.out.println(detector9.toGraphviz());
     }
 }
