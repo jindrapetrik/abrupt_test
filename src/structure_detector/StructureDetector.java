@@ -406,6 +406,270 @@ public class StructureDetector {
     }
 
     /**
+     * Generates a Graphviz/DOT representation of the CFG.
+     * 
+     * @return DOT format string representing the CFG
+     */
+    public String toGraphviz() {
+        StringBuilder sb = new StringBuilder();
+        sb.append("digraph {\n");
+        
+        for (Node node : allNodes) {
+            for (Node succ : node.succs) {
+                sb.append("  ").append(node.getLabel()).append("->").append(succ.getLabel()).append(";\n");
+            }
+        }
+        
+        sb.append("}");
+        return sb.toString();
+    }
+
+    /**
+     * Generates a pseudocode representation of the detected structures.
+     * Outputs the control flow as structured pseudocode with if/else blocks and loops.
+     * 
+     * @return pseudocode string representing the detected structures
+     */
+    public String toPseudocode() {
+        StringBuilder sb = new StringBuilder();
+        Set<Node> visited = new HashSet<>();
+        List<LoopStructure> loops = detectLoops();
+        List<IfStructure> ifs = detectIfs();
+        
+        // Create lookup maps for quick access
+        Map<Node, LoopStructure> loopHeaders = new HashMap<>();
+        for (LoopStructure loop : loops) {
+            // Only add the loop with the largest body for each header (handles nested loops)
+            LoopStructure existing = loopHeaders.get(loop.header);
+            if (existing == null || loop.body.size() > existing.body.size()) {
+                loopHeaders.put(loop.header, loop);
+            }
+        }
+        
+        Map<Node, IfStructure> ifConditions = new HashMap<>();
+        for (IfStructure ifStruct : ifs) {
+            ifConditions.put(ifStruct.conditionNode, ifStruct);
+        }
+        
+        generatePseudocode(entryNode, visited, sb, "", loopHeaders, ifConditions, null, null);
+        
+        return sb.toString();
+    }
+
+    private void generatePseudocode(Node node, Set<Node> visited, StringBuilder sb, String indent,
+                                     Map<Node, LoopStructure> loopHeaders, Map<Node, IfStructure> ifConditions,
+                                     LoopStructure currentLoop, Node stopAt) {
+        if (node == null || visited.contains(node)) {
+            return;
+        }
+        
+        // Stop at merge node or loop exit
+        if (stopAt != null && node.equals(stopAt)) {
+            return;
+        }
+        
+        visited.add(node);
+        
+        // Check if this is a loop header
+        LoopStructure loop = loopHeaders.get(node);
+        if (loop != null && currentLoop != loop) {
+            sb.append(indent).append("while (").append(node.getLabel()).append(") {\n");
+            
+            // Find the node that continues the loop (not the exit)
+            Node loopContinue = null;
+            Node loopExit = null;
+            for (Node succ : node.succs) {
+                if (loop.body.contains(succ) && !succ.equals(node)) {
+                    loopContinue = succ;
+                } else if (!loop.body.contains(succ)) {
+                    loopExit = succ;
+                }
+            }
+            
+            // Generate body of the loop
+            if (loopContinue != null) {
+                Set<Node> loopVisited = new HashSet<>();
+                loopVisited.add(node); // Don't revisit header
+                generatePseudocodeInLoop(loopContinue, loopVisited, sb, indent + "    ", loopHeaders, ifConditions, loop);
+            }
+            
+            sb.append(indent).append("}\n");
+            
+            // Continue after the loop
+            if (loopExit != null) {
+                generatePseudocode(loopExit, visited, sb, indent, loopHeaders, ifConditions, currentLoop, stopAt);
+            }
+            return;
+        }
+        
+        // Check if this is an if condition
+        IfStructure ifStruct = ifConditions.get(node);
+        if (ifStruct != null) {
+            sb.append(indent).append("if (").append(node.getLabel()).append(") {\n");
+            
+            // Generate true branch
+            Set<Node> trueVisited = new HashSet<>(visited);
+            generatePseudocode(ifStruct.trueBranch, trueVisited, sb, indent + "    ", loopHeaders, ifConditions, currentLoop, ifStruct.mergeNode);
+            
+            sb.append(indent).append("} else {\n");
+            
+            // Generate false branch
+            Set<Node> falseVisited = new HashSet<>(visited);
+            generatePseudocode(ifStruct.falseBranch, falseVisited, sb, indent + "    ", loopHeaders, ifConditions, currentLoop, ifStruct.mergeNode);
+            
+            sb.append(indent).append("}\n");
+            
+            // Continue after merge
+            if (ifStruct.mergeNode != null) {
+                visited.addAll(trueVisited);
+                visited.addAll(falseVisited);
+                generatePseudocode(ifStruct.mergeNode, visited, sb, indent, loopHeaders, ifConditions, currentLoop, stopAt);
+            }
+            return;
+        }
+        
+        // Regular node - just output it
+        sb.append(indent).append(node.getLabel()).append(";\n");
+        
+        // Continue with successors
+        for (Node succ : node.succs) {
+            generatePseudocode(succ, visited, sb, indent, loopHeaders, ifConditions, currentLoop, stopAt);
+        }
+    }
+
+    private void generatePseudocodeInLoop(Node node, Set<Node> visited, StringBuilder sb, String indent,
+                                           Map<Node, LoopStructure> loopHeaders, Map<Node, IfStructure> ifConditions,
+                                           LoopStructure currentLoop) {
+        if (node == null || visited.contains(node)) {
+            return;
+        }
+        
+        // Don't go outside the loop
+        if (!currentLoop.body.contains(node)) {
+            return;
+        }
+        
+        // Check for break
+        for (BreakEdge breakEdge : currentLoop.breaks) {
+            if (breakEdge.from.equals(node)) {
+                // This node has a break
+                IfStructure ifStruct = ifConditions.get(node);
+                if (ifStruct != null) {
+                    sb.append(indent).append("if (").append(node.getLabel()).append(") {\n");
+                    
+                    // Determine which branch is break
+                    if (!currentLoop.body.contains(ifStruct.trueBranch)) {
+                        sb.append(indent).append("    break;\n");
+                        sb.append(indent).append("} else {\n");
+                        Set<Node> elseVisited = new HashSet<>(visited);
+                        elseVisited.add(node);
+                        generatePseudocodeInLoop(ifStruct.falseBranch, elseVisited, sb, indent + "    ", loopHeaders, ifConditions, currentLoop);
+                    } else {
+                        Set<Node> thenVisited = new HashSet<>(visited);
+                        thenVisited.add(node);
+                        generatePseudocodeInLoop(ifStruct.trueBranch, thenVisited, sb, indent + "    ", loopHeaders, ifConditions, currentLoop);
+                        sb.append(indent).append("} else {\n");
+                        sb.append(indent).append("    break;\n");
+                    }
+                    sb.append(indent).append("}\n");
+                    return;
+                }
+            }
+        }
+        
+        // Check for continue
+        for (ContinueEdge continueEdge : currentLoop.continues) {
+            if (continueEdge.from.equals(node)) {
+                IfStructure ifStruct = ifConditions.get(node);
+                if (ifStruct != null) {
+                    sb.append(indent).append("if (").append(node.getLabel()).append(") {\n");
+                    
+                    // Determine which branch is continue
+                    if (ifStruct.trueBranch.equals(currentLoop.header)) {
+                        sb.append(indent).append("    continue;\n");
+                        sb.append(indent).append("} else {\n");
+                        Set<Node> elseVisited = new HashSet<>(visited);
+                        elseVisited.add(node);
+                        generatePseudocodeInLoop(ifStruct.falseBranch, elseVisited, sb, indent + "    ", loopHeaders, ifConditions, currentLoop);
+                    } else {
+                        Set<Node> thenVisited = new HashSet<>(visited);
+                        thenVisited.add(node);
+                        generatePseudocodeInLoop(ifStruct.trueBranch, thenVisited, sb, indent + "    ", loopHeaders, ifConditions, currentLoop);
+                        sb.append(indent).append("} else {\n");
+                        sb.append(indent).append("    continue;\n");
+                    }
+                    sb.append(indent).append("}\n");
+                    return;
+                }
+            }
+        }
+        
+        visited.add(node);
+        
+        // Check if this is a nested loop header
+        LoopStructure nestedLoop = loopHeaders.get(node);
+        if (nestedLoop != null && nestedLoop != currentLoop) {
+            sb.append(indent).append("while (").append(node.getLabel()).append(") {\n");
+            
+            Node loopContinue = null;
+            Node loopExit = null;
+            for (Node succ : node.succs) {
+                if (nestedLoop.body.contains(succ) && !succ.equals(node)) {
+                    loopContinue = succ;
+                } else if (!nestedLoop.body.contains(succ)) {
+                    loopExit = succ;
+                }
+            }
+            
+            if (loopContinue != null) {
+                Set<Node> nestedVisited = new HashSet<>();
+                nestedVisited.add(node);
+                generatePseudocodeInLoop(loopContinue, nestedVisited, sb, indent + "    ", loopHeaders, ifConditions, nestedLoop);
+            }
+            
+            sb.append(indent).append("}\n");
+            
+            if (loopExit != null && currentLoop.body.contains(loopExit)) {
+                generatePseudocodeInLoop(loopExit, visited, sb, indent, loopHeaders, ifConditions, currentLoop);
+            }
+            return;
+        }
+        
+        // Check if this is an if condition inside the loop
+        IfStructure ifStruct = ifConditions.get(node);
+        if (ifStruct != null) {
+            sb.append(indent).append("if (").append(node.getLabel()).append(") {\n");
+            
+            Set<Node> trueVisited = new HashSet<>(visited);
+            generatePseudocodeInLoop(ifStruct.trueBranch, trueVisited, sb, indent + "    ", loopHeaders, ifConditions, currentLoop);
+            
+            sb.append(indent).append("} else {\n");
+            
+            Set<Node> falseVisited = new HashSet<>(visited);
+            generatePseudocodeInLoop(ifStruct.falseBranch, falseVisited, sb, indent + "    ", loopHeaders, ifConditions, currentLoop);
+            
+            sb.append(indent).append("}\n");
+            
+            if (ifStruct.mergeNode != null && currentLoop.body.contains(ifStruct.mergeNode)) {
+                visited.addAll(trueVisited);
+                visited.addAll(falseVisited);
+                generatePseudocodeInLoop(ifStruct.mergeNode, visited, sb, indent, loopHeaders, ifConditions, currentLoop);
+            }
+            return;
+        }
+        
+        // Regular node
+        sb.append(indent).append(node.getLabel()).append(";\n");
+        
+        // Continue with successors inside the loop
+        for (Node succ : node.succs) {
+            if (currentLoop.body.contains(succ) && !succ.equals(currentLoop.header)) {
+                generatePseudocodeInLoop(succ, visited, sb, indent, loopHeaders, ifConditions, currentLoop);
+            }
+        }
+    }
+
+    /**
      * Detects all control flow structures in the CFG.
      */
     public void analyze() {
@@ -451,6 +715,10 @@ public class StructureDetector {
         
         StructureDetector detector1 = new StructureDetector(entry1);
         detector1.analyze();
+        System.out.println("\n--- Pseudocode ---");
+        System.out.println(detector1.toPseudocode());
+        System.out.println("--- Graphviz/DOT ---");
+        System.out.println(detector1.toGraphviz());
         
         // Example 2: While loop
         System.out.println("\n===== Example 2: While Loop =====");
@@ -467,6 +735,10 @@ public class StructureDetector {
         
         StructureDetector detector2 = new StructureDetector(entry2);
         detector2.analyze();
+        System.out.println("\n--- Pseudocode ---");
+        System.out.println(detector2.toPseudocode());
+        System.out.println("--- Graphviz/DOT ---");
+        System.out.println(detector2.toGraphviz());
         
         // Example 3: Loop with break and continue
         System.out.println("\n===== Example 3: Loop with Break and Continue =====");
@@ -493,6 +765,10 @@ public class StructureDetector {
         
         StructureDetector detector3 = new StructureDetector(entry3);
         detector3.analyze();
+        System.out.println("\n--- Pseudocode ---");
+        System.out.println(detector3.toPseudocode());
+        System.out.println("--- Graphviz/DOT ---");
+        System.out.println(detector3.toGraphviz());
         
         // Example 4: Nested loops
         System.out.println("\n===== Example 4: Nested Loops =====");
@@ -514,6 +790,10 @@ public class StructureDetector {
         
         StructureDetector detector4 = new StructureDetector(entry4);
         detector4.analyze();
+        System.out.println("\n--- Pseudocode ---");
+        System.out.println(detector4.toPseudocode());
+        System.out.println("--- Graphviz/DOT ---");
+        System.out.println(detector4.toGraphviz());
         
         // Example 5: If inside loop
         System.out.println("\n===== Example 5: If Inside Loop =====");
@@ -537,5 +817,9 @@ public class StructureDetector {
         
         StructureDetector detector5 = new StructureDetector(entry5);
         detector5.analyze();
+        System.out.println("\n--- Pseudocode ---");
+        System.out.println(detector5.toPseudocode());
+        System.out.println("--- Graphviz/DOT ---");
+        System.out.println(detector5.toGraphviz());
     }
 }
