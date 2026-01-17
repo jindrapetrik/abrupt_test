@@ -595,13 +595,45 @@ public class StructureDetector {
      * @param loops the detected loops
      */
     private void detectContinueBlocks(List<LoopStructure> loops) {
-        // For each loop, find edges that jump to nodes inside the loop (not header)
-        // These represent continue-like jumps that need labeled blocks
+        // First, find the main loop for each header (the one with the largest body)
+        Map<Node, LoopStructure> mainLoops = new HashMap<>();
         for (LoopStructure loop : loops) {
+            LoopStructure existing = mainLoops.get(loop.header);
+            if (existing == null || loop.body.size() > existing.body.size()) {
+                mainLoops.put(loop.header, loop);
+            }
+        }
+        
+        // For each main loop, find edges that jump to nodes inside the loop (not header)
+        // These represent continue-like jumps that need labeled blocks
+        for (LoopStructure loop : mainLoops.values()) {
             Node backEdgeSource = loop.backEdgeSource;
             
             // Skip if the back-edge source is the loop header itself (simple while loop)
             if (backEdgeSource.equals(loop.header)) {
+                continue;
+            }
+            
+            // Also skip if there are direct continues to the header from within the loop body
+            // (not from the back-edge source). This indicates a simple while loop pattern
+            // where we can use simple 'continue;' statements instead of labeled blocks.
+            boolean hasDirectContinueToHeader = false;
+            for (Node node : loop.body) {
+                if (!node.equals(loop.header) && !node.equals(backEdgeSource)) {
+                    // Check if this node has a direct edge to the header
+                    for (Node succ : node.succs) {
+                        if (succ.equals(loop.header)) {
+                            hasDirectContinueToHeader = true;
+                            break;
+                        }
+                    }
+                }
+                if (hasDirectContinueToHeader) break;
+            }
+            
+            // If there are direct continues to the header, we don't need labeled blocks
+            // because we can use simple 'continue;' statements
+            if (hasDirectContinueToHeader) {
                 continue;
             }
             
@@ -832,8 +864,6 @@ public class StructureDetector {
         // Check if this is a loop header
         LoopStructure loop = loopHeaders.get(node);
         if (loop != null && currentLoop != loop) {
-            sb.append(indent).append("while (").append(node.getLabel()).append(") {\n");
-            
             // Find the node that continues the loop (not the exit)
             Node loopContinue = null;
             Node loopExit = null;
@@ -845,11 +875,22 @@ public class StructureDetector {
                 }
             }
             
+            // Use while(true) style with condition check inside
+            sb.append(indent).append("while(true) {\n");
+            String innerIndent = indent + "    ";
+            
+            // If header has 2 successors (condition check), output the break condition first
+            if (loopExit != null && node.succs.size() == 2) {
+                sb.append(innerIndent).append("if (!").append(node.getLabel()).append(") {\n");
+                sb.append(innerIndent).append("    break;\n");
+                sb.append(innerIndent).append("}\n");
+            }
+            
             // Generate body of the loop
             if (loopContinue != null) {
                 Set<Node> loopVisited = new HashSet<>();
                 loopVisited.add(node); // Don't revisit header
-                generatePseudocodeInLoop(loopContinue, loopVisited, sb, indent + "    ", loopHeaders, ifConditions, labeledBreakEdges, blockStarts, loop, currentBlock);
+                generatePseudocodeInLoop(loopContinue, loopVisited, sb, innerIndent, loopHeaders, ifConditions, labeledBreakEdges, blockStarts, loop, currentBlock);
             }
             
             sb.append(indent).append("}\n");
@@ -1082,8 +1123,6 @@ public class StructureDetector {
         // Check if this is a nested loop header
         LoopStructure nestedLoop = loopHeaders.get(node);
         if (nestedLoop != null && nestedLoop != currentLoop) {
-            sb.append(indent).append("while (").append(node.getLabel()).append(") {\n");
-            
             Node loopContinue = null;
             Node loopExit = null;
             for (Node succ : node.succs) {
@@ -1094,10 +1133,21 @@ public class StructureDetector {
                 }
             }
             
+            // Use while(true) style with condition check inside
+            sb.append(indent).append("while(true) {\n");
+            String innerIndent = indent + "    ";
+            
+            // If header has 2 successors (condition check), output the break condition first
+            if (loopExit != null && node.succs.size() == 2) {
+                sb.append(innerIndent).append("if (!").append(node.getLabel()).append(") {\n");
+                sb.append(innerIndent).append("    break;\n");
+                sb.append(innerIndent).append("}\n");
+            }
+            
             if (loopContinue != null) {
                 Set<Node> nestedVisited = new HashSet<>();
                 nestedVisited.add(node);
-                generatePseudocodeInLoop(loopContinue, nestedVisited, sb, indent + "    ", loopHeaders, ifConditions, labeledBreakEdges, blockStarts, nestedLoop, currentBlock);
+                generatePseudocodeInLoop(loopContinue, nestedVisited, sb, innerIndent, loopHeaders, ifConditions, labeledBreakEdges, blockStarts, nestedLoop, currentBlock);
             }
             
             sb.append(indent).append("}\n");
