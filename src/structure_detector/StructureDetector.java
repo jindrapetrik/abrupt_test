@@ -182,9 +182,8 @@ public class StructureDetector {
         if (reachableFromBranch1.contains(branch2)) {
             return branch2;
         }
-        // Check if branch1 is reachable from branch2
-        Set<Node> reachableFromBranch2 = getReachableNodes(branch2);
-        if (reachableFromBranch2.contains(branch1)) {
+        // Check if branch1 is reachable from branch2 using early-exit search
+        if (isReachable(branch2, branch1)) {
             return branch1;
         }
         
@@ -202,6 +201,33 @@ public class StructureDetector {
         }
         
         return null; // No merge node found (e.g., branches don't converge)
+    }
+
+    /**
+     * Checks if target is reachable from start using early-exit BFS.
+     */
+    private boolean isReachable(Node start, Node target) {
+        if (start.equals(target)) {
+            return true;
+        }
+        Set<Node> visited = new HashSet<>();
+        Queue<Node> queue = new LinkedList<>();
+        queue.add(start);
+        visited.add(start);
+        
+        while (!queue.isEmpty()) {
+            Node current = queue.poll();
+            for (Node succ : current.succs) {
+                if (succ.equals(target)) {
+                    return true;
+                }
+                if (!visited.contains(succ)) {
+                    visited.add(succ);
+                    queue.add(succ);
+                }
+            }
+        }
+        return false;
     }
 
     /**
@@ -302,13 +328,19 @@ public class StructureDetector {
             for (Node node : allNodes) {
                 if (node.equals(entryNode)) continue;
                 
-                Set<Node> newDom = new HashSet<>(allNodesSet);
+                Set<Node> newDom;
                 
-                // Intersect dominators of all predecessors
-                for (Node pred : node.preds) {
-                    Set<Node> predDom = dominators.get(pred);
-                    if (predDom != null) {
-                        newDom.retainAll(predDom);
+                // Handle nodes with no predecessors - they are only dominated by themselves
+                if (node.preds.isEmpty()) {
+                    newDom = new HashSet<>();
+                } else {
+                    newDom = new HashSet<>(allNodesSet);
+                    // Intersect dominators of all predecessors
+                    for (Node pred : node.preds) {
+                        Set<Node> predDom = dominators.get(pred);
+                        if (predDom != null) {
+                            newDom.retainAll(predDom);
+                        }
                     }
                 }
                 

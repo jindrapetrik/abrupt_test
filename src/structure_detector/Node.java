@@ -3,9 +3,10 @@ package structure_detector;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
+import java.util.concurrent.atomic.AtomicInteger;
 
 public class Node {
-    private static int nextId = 0;
+    private static final AtomicInteger nextId = new AtomicInteger(0);
     
     private final int id;
     private String label;
@@ -13,12 +14,12 @@ public class Node {
     public List<Node> succs = new ArrayList<>();
     
     public Node() {
-        this.id = nextId++;
+        this.id = nextId.getAndIncrement();
         this.label = "node" + id;
     }
     
     public Node(String label) {
-        this.id = nextId++;
+        this.id = nextId.getAndIncrement();
         this.label = label;
     }
     
@@ -75,6 +76,6 @@ public class Node {
     }
     
     public static void resetIdCounter() {
-        nextId = 0;
+        nextId.set(0);
     }
 }
