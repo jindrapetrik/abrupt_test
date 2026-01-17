@@ -910,22 +910,42 @@ public class StructureDetector {
                     sb.append(indent).append("} else {\n");
                     Set<Node> elseVisited = new HashSet<>(visited);
                     elseVisited.add(node);
-                    generatePseudocodeInLoop(ifStruct.falseBranch, elseVisited, sb, indent + "    ", loopHeaders, ifConditions, labeledBreakEdges, blockStarts, currentLoop, currentBlock);
+                    // Check if false branch goes outside the loop (break to outer loop)
+                    if (!currentLoop.body.contains(ifStruct.falseBranch)) {
+                        generateBreakOrNodeStatement(ifStruct.falseBranch, sb, indent + "    ", loopHeaders, currentLoop);
+                    } else {
+                        generatePseudocodeInLoop(ifStruct.falseBranch, elseVisited, sb, indent + "    ", loopHeaders, ifConditions, labeledBreakEdges, blockStarts, currentLoop, currentBlock);
+                    }
                 } else if (ifStruct.falseBranch.equals(labeledBreak.to)) {
                     Set<Node> thenVisited = new HashSet<>(visited);
                     thenVisited.add(node);
-                    generatePseudocodeInLoop(ifStruct.trueBranch, thenVisited, sb, indent + "    ", loopHeaders, ifConditions, labeledBreakEdges, blockStarts, currentLoop, currentBlock);
+                    // Check if true branch goes outside the loop (break to outer loop)
+                    if (!currentLoop.body.contains(ifStruct.trueBranch)) {
+                        generateBreakOrNodeStatement(ifStruct.trueBranch, sb, indent + "    ", loopHeaders, currentLoop);
+                    } else {
+                        generatePseudocodeInLoop(ifStruct.trueBranch, thenVisited, sb, indent + "    ", loopHeaders, ifConditions, labeledBreakEdges, blockStarts, currentLoop, currentBlock);
+                    }
                     sb.append(indent).append("} else {\n");
                     sb.append(indent).append("    break ").append(labeledBreak.label).append(";\n");
                 } else {
                     // Neither branch is the direct labeled break target, continue normally
                     Set<Node> thenVisited = new HashSet<>(visited);
                     thenVisited.add(node);
-                    generatePseudocodeInLoop(ifStruct.trueBranch, thenVisited, sb, indent + "    ", loopHeaders, ifConditions, labeledBreakEdges, blockStarts, currentLoop, currentBlock);
+                    // Check if true branch goes outside the loop
+                    if (!currentLoop.body.contains(ifStruct.trueBranch)) {
+                        generateBreakOrNodeStatement(ifStruct.trueBranch, sb, indent + "    ", loopHeaders, currentLoop);
+                    } else {
+                        generatePseudocodeInLoop(ifStruct.trueBranch, thenVisited, sb, indent + "    ", loopHeaders, ifConditions, labeledBreakEdges, blockStarts, currentLoop, currentBlock);
+                    }
                     sb.append(indent).append("} else {\n");
                     Set<Node> elseVisited = new HashSet<>(visited);
                     elseVisited.add(node);
-                    generatePseudocodeInLoop(ifStruct.falseBranch, elseVisited, sb, indent + "    ", loopHeaders, ifConditions, labeledBreakEdges, blockStarts, currentLoop, currentBlock);
+                    // Check if false branch goes outside the loop
+                    if (!currentLoop.body.contains(ifStruct.falseBranch)) {
+                        generateBreakOrNodeStatement(ifStruct.falseBranch, sb, indent + "    ", loopHeaders, currentLoop);
+                    } else {
+                        generatePseudocodeInLoop(ifStruct.falseBranch, elseVisited, sb, indent + "    ", loopHeaders, ifConditions, labeledBreakEdges, blockStarts, currentLoop, currentBlock);
+                    }
                 }
                 sb.append(indent).append("}\n");
                 return;
@@ -1050,6 +1070,18 @@ public class StructureDetector {
                 generatePseudocodeInLoop(succ, visited, sb, indent, loopHeaders, ifConditions, labeledBreakEdges, blockStarts, currentLoop, currentBlock);
             }
         }
+    }
+
+    /**
+     * Generates a break statement or node statement for a node that's outside the current loop.
+     * Tries to determine if it's a break to a specific outer loop, or just outputs the node label.
+     */
+    private void generateBreakOrNodeStatement(Node node, StringBuilder sb, String indent,
+                                               Map<Node, LoopStructure> loopHeaders, LoopStructure currentLoop) {
+        // Check if this node or its successor leads to exiting an outer loop
+        // For now, just output the node as a statement (it represents a break action)
+        // The node label like "break_loop_a" makes it clear what's happening
+        sb.append(indent).append(node.getLabel()).append(";\n");
     }
 
     /**
