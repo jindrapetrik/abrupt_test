@@ -1383,15 +1383,15 @@ public class StructureDetector {
         System.out.println(detector7.toGraphviz());
         
         // Example 8: Complex nested loops with labeled breaks and continues
-        // Represents a for loop as while with proper increment handling:
+        // Represents the following code:
         //
         // loop_a: for (var c = 0; c < 8; c = c + 1) {
         //   loop_b: for (var d = 0; d < 25; d++) {
         //     for (var e = 0; e < 50; e++) {
-        //       if (e == 9) { break loop_b; }
-        //       if (e == 20) { continue loop_a; }  // goes to c = c + 1
-        //       if (e == 8) { break; }             // goes to d++
-        //       break loop_a;
+        //       if (e == 9) { trace("X"); break loop_b; }
+        //       if (e == 20) { trace("Y"); continue loop_a; }
+        //       if (e == 8) { trace("Z"); break; }
+        //       trace("BA"); break loop_a;
         //     }
         //   }
         //   trace("hello");
@@ -1403,12 +1403,10 @@ public class StructureDetector {
         //     while (loop_b_cond) {
         //       loop_b_cont: {
         //         while (inner_cond) {
-        //           inner_cont: {
-        //             if (e == 9) { break loop_b_cont; }  // break loop_b
-        //             if (e == 20) { break loop_a_cont; } // continue loop_a
-        //             if (e == 8) { break inner_cont; }   // break inner
-        //             break loop_a;
-        //           }
+        //           if (e == 9) { trace_X; break loop_b; }
+        //           if (e == 20) { trace_Y; break loop_a_cont; } // continue loop_a -> inc_c
+        //           if (e == 8) { trace_Z; break loop_b_cont; }  // break inner -> inc_d
+        //           trace_BA; break loop_a;
         //           inc_e;
         //         }
         //       }
@@ -1427,28 +1425,30 @@ public class StructureDetector {
             "  loop_a_cond->exit;\n" +                 // c >= 8 -> exit
             // loop_b: middle for loop condition
             "  loop_b_cond->inner_cond;\n" +           // d < 25 -> enter inner
-            "  loop_b_cond->trace_hello;\n" +          // d >= 25 -> trace (after loop_b)
+            "  loop_b_cond->trace_hello;\n" +          // d >= 25 -> trace_hello (after loop_b)
             // inner: anonymous innermost for loop condition
             "  inner_cond->check_e9;\n" +              // e < 50 -> enter body
             "  inner_cond->inc_d;\n" +                 // e >= 50 -> d++ (exit inner normally)
-            // if (e == 9) { break loop_b; }
-            "  check_e9->trace_hello;\n" +             // break loop_b -> trace (skip d++)
-            "  check_e9->check_e20;\n" +               // else continue
-            // if (e == 20) { continue loop_a; } -> goes to c++
-            "  check_e20->inc_c;\n" +                  // continue loop_a -> c++
-            "  check_e20->check_e8;\n" +               // else continue
-            // if (e == 8) { break; } -> goes to d++ (exit inner)
-            "  check_e8->inc_d;\n" +                   // break inner -> d++
-            "  check_e8->break_loop_a;\n" +            // else -> break loop_a
-            // break loop_a - exits outer loop entirely
-            "  break_loop_a->exit;\n" +
+            // if (e == 9) { trace("X"); break loop_b; }
+            "  check_e9->trace_X;\n" +                 // true -> trace_X
+            "  check_e9->check_e20;\n" +               // false -> continue to check_e20
+            "  trace_X->trace_hello;\n" +              // trace_X -> break loop_b (skip d++)
+            // if (e == 20) { trace("Y"); continue loop_a; }
+            "  check_e20->trace_Y;\n" +                // true -> trace_Y
+            "  check_e20->check_e8;\n" +               // false -> continue to check_e8
+            "  trace_Y->inc_c;\n" +                    // trace_Y -> continue loop_a (c++)
+            // if (e == 8) { trace("Z"); break; }
+            "  check_e8->trace_Z;\n" +                 // true -> trace_Z
+            "  check_e8->trace_BA;\n" +                // false -> trace_BA
+            "  trace_Z->inc_d;\n" +                    // trace_Z -> break inner (d++)
+            // trace("BA"); break loop_a;
+            "  trace_BA->exit;\n" +                    // trace_BA -> break loop_a (exit)
             // inner loop: normal body end goes to e++
-            // (all code paths in this example break/continue, so no normal path to inc_e)
             "  inc_e->inner_cond;\n" +                 // e++ -> back to inner condition
             // loop_b: d++ after inner loop exits normally
             "  inc_d->loop_b_cond;\n" +                // d++ -> back to loop_b condition
             // trace("hello") at end of loop_a body
-            "  trace_hello->inc_c;\n" +                // trace -> c++
+            "  trace_hello->inc_c;\n" +                // trace_hello -> c++
             // loop_a: c++ at end of iteration
             "  inc_c->loop_a_cond;\n" +                // c++ -> back to loop_a condition
             "}"
