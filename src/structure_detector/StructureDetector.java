@@ -580,6 +580,84 @@ public class StructureDetector {
     }
 
     /**
+     * Automatically detects labeled blocks needed for for-loop continue semantics.
+     * A labeled block is needed when there's an edge that jumps to a node INSIDE the loop body
+     * that is NOT the loop header, but leads back to the header.
+     * 
+     * This pattern occurs in for-loops where "continue" jumps to the increment,
+     * not directly to the condition check.
+     * 
+     * @param loops the detected loops
+     */
+    private void detectContinueBlocks(List<LoopStructure> loops) {
+        // For each loop, find edges that jump to nodes inside the loop (not header)
+        // These represent continue-like jumps that need labeled blocks
+        for (LoopStructure loop : loops) {
+            Node backEdgeSource = loop.backEdgeSource;
+            
+            // Skip if the back-edge source is the loop header itself (simple while loop)
+            if (backEdgeSource.equals(loop.header)) {
+                continue;
+            }
+            
+            // Find edges that go to the back-edge source from nodes OTHER than
+            // the normal predecessor chain. These are "skip" jumps (continue semantics).
+            Set<Node> abnormalJumps = new HashSet<>();
+            
+            for (Node node : loop.body) {
+                // Skip the loop header - its edges to the body are normal flow
+                if (node.equals(loop.header)) {
+                    continue;
+                }
+                
+                for (Node succ : node.succs) {
+                    // If an edge goes to the back-edge source from a node inside the loop
+                    // (and this is not the normal flow to back-edge source)
+                    if (succ.equals(backEdgeSource)) {
+                        // Check if this node is "normally" before the back-edge source
+                        // A node is an "abnormal jump" if it's not a direct predecessor in the normal flow
+                        // We detect this by checking if the node has multiple successors (conditional)
+                        // and one of them is the back-edge source
+                        if (node.succs.size() > 1) {
+                            abnormalJumps.add(node);
+                        }
+                    }
+                }
+            }
+            
+            // If there are abnormal jumps to the back-edge source, we need a labeled block
+            if (!abnormalJumps.isEmpty()) {
+                // Find the start of the loop body (first node after header that enters the body)
+                Node bodyStart = null;
+                for (Node succ : loop.header.succs) {
+                    if (loop.body.contains(succ) && !succ.equals(loop.header)) {
+                        bodyStart = succ;
+                        break;
+                    }
+                }
+                
+                if (bodyStart != null) {
+                    // Create a labeled block from bodyStart to backEdgeSource
+                    String label = loop.header.getLabel() + "_cont";
+                    
+                    // Check if this block already exists
+                    boolean exists = false;
+                    for (LabeledBlockStructure block : labeledBlocks) {
+                        if (block.startNode.equals(bodyStart) && block.endNode.equals(backEdgeSource)) {
+                            exists = true;
+                            break;
+                        }
+                    }
+                    
+                    if (!exists) {
+                        addLabeledBlock(label, bodyStart, backEdgeSource);
+                    }
+                }
+            }
+        }
+    }
+
+    /**
      * Generates a Graphviz/DOT representation of the CFG.
      * 
      * @return DOT format string representing the CFG
@@ -609,6 +687,9 @@ public class StructureDetector {
         Set<Node> visited = new HashSet<>();
         List<LoopStructure> loops = detectLoops();
         List<IfStructure> ifs = detectIfs();
+        
+        // Automatically detect labeled blocks for continue semantics
+        detectContinueBlocks(loops);
         
         // Create lookup maps for quick access
         Map<Node, LoopStructure> loopHeaders = new HashMap<>();
@@ -1082,6 +1163,9 @@ public class StructureDetector {
         }
         System.out.println();
         
+        // Auto-detect labeled blocks for continue semantics
+        detectContinueBlocks(loops);
+        
         System.out.println("Labeled Block Structures (" + labeledBlocks.size() + "):");
         for (LabeledBlockStructure block : labeledBlocks) {
             System.out.println("  " + block);
@@ -1317,33 +1401,8 @@ public class StructureDetector {
             "}"
         );
         
-        // Register labeled blocks for continue semantics
-        // loop_a_cont: wraps body before inc_c (for continue loop_a)
-        Node loopACont_start = null;
-        Node loopACont_end = null;  // inc_c is after the block
-        // loop_b_cont: wraps body before inc_d (for break loop_b / continue loop_b)
-        Node loopBCont_start = null;
-        Node loopBCont_end = null;  // inc_d is after the block
-        // inner_cont: wraps body before inc_e (for break inner)
-        Node innerCont_start = null;
-        Node innerCont_end = null;  // inc_d is where it breaks to
-        
-        for (Node n : detector8.allNodes) {
-            if (n.getLabel().equals("loop_b_cond")) loopACont_start = n;
-            if (n.getLabel().equals("inc_c")) loopACont_end = n;
-            if (n.getLabel().equals("inner_cond")) loopBCont_start = n;
-            if (n.getLabel().equals("inc_d")) loopBCont_end = n;
-            if (n.getLabel().equals("check_e9")) innerCont_start = n;
-        }
-        
-        // Register labeled block for continue loop_a (body before inc_c)
-        if (loopACont_start != null && loopACont_end != null) {
-            detector8.addLabeledBlock("loop_a_cont", loopACont_start, loopACont_end);
-        }
-        // Register labeled block for break loop_b (body before inc_d - but break loop_b skips to trace)
-        if (loopBCont_start != null && loopBCont_end != null) {
-            detector8.addLabeledBlock("loop_b_cont", loopBCont_start, loopBCont_end);
-        }
+        // Labeled blocks for continue semantics are now auto-detected!
+        // No need to manually call addLabeledBlock() anymore.
         
         detector8.analyze();
         System.out.println("\n--- Pseudocode ---");
