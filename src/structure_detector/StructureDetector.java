@@ -254,6 +254,19 @@ public class StructureDetector {
      * @param endNode the node after the labeled block (the break target)
      */
     public void addLabeledBlock(String label, Node startNode, Node endNode) {
+        addLabeledBlock(label, startNode, endNode, null);
+    }
+    
+    /**
+     * Registers a labeled block structure with loop awareness.
+     * Edges that are normal loop exits (false branch of loop condition) are not counted as labeled breaks.
+     * 
+     * @param label the label name for the block
+     * @param startNode the first node inside the labeled block
+     * @param endNode the node after the labeled block (the break target)
+     * @param loopHeaders map of loop headers to their loop structures, may be null
+     */
+    private void addLabeledBlock(String label, Node startNode, Node endNode, Map<Node, LoopStructure> loopHeaders) {
         Set<Node> body = new HashSet<>();
         // Collect all nodes in the block (reachable from start but before end)
         collectBlockBody(startNode, endNode, body);
@@ -261,10 +274,24 @@ public class StructureDetector {
         LabeledBlockStructure block = new LabeledBlockStructure(label, startNode, endNode, body);
         
         // Detect breaks within the block (edges that go to endNode from within the block)
+        // Exclude edges that are normal loop exits (will be rendered as 'break;' from while(true))
         for (Node node : body) {
             for (Node succ : node.succs) {
                 if (succ.equals(endNode)) {
-                    block.breaks.add(new LabeledBreakEdge(node, endNode, label));
+                    // Check if this is a normal loop exit (should not count as labeled break)
+                    boolean isNormalLoopExit = false;
+                    if (loopHeaders != null) {
+                        LoopStructure loop = loopHeaders.get(node);
+                        if (loop != null && !loop.body.contains(endNode)) {
+                            // This node is a loop header and endNode is outside the loop
+                            // This is a normal loop exit condition, not a labeled break
+                            isNormalLoopExit = true;
+                        }
+                    }
+                    
+                    if (!isNormalLoopExit) {
+                        block.breaks.add(new LabeledBreakEdge(node, endNode, label));
+                    }
                 }
             }
         }
@@ -721,7 +748,7 @@ public class StructureDetector {
                     }
                     
                     if (!exists) {
-                        addLabeledBlock(label, bodyStart, blockEnd);
+                        addLabeledBlock(label, bodyStart, blockEnd, mainLoops);
                     }
                 }
             }
@@ -932,8 +959,9 @@ public class StructureDetector {
         }
         
         // Check if this is a labeled block start (before marking as visited)
+        // Only render the block if there are actual breaks targeting it
         LabeledBlockStructure block = blockStarts.get(node);
-        if (block != null && currentBlock != block) {
+        if (block != null && currentBlock != block && !block.breaks.isEmpty()) {
             sb.append(indent).append(block.label).append(": {\n");
             
             // Generate body of the block - process the start node's content and successors
@@ -1114,8 +1142,9 @@ public class StructureDetector {
         }
         
         // Check if this is a labeled block start (before marking as visited)
+        // Only render the block if there are actual breaks targeting it
         LabeledBlockStructure block = blockStarts.get(node);
-        if (block != null && currentBlock != block) {
+        if (block != null && currentBlock != block && !block.breaks.isEmpty()) {
             sb.append(indent).append(block.label).append(": {\n");
             
             // Generate body of the block within the loop
