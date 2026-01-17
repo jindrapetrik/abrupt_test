@@ -121,6 +121,80 @@ public class StructureDetector {
     }
 
     /**
+     * Parses a Graphviz/DOT format string and builds a CFG.
+     * The first node encountered becomes the entry node.
+     * Supports chained edges like: a->b->c
+     * 
+     * @param dot the DOT format string
+     * @return a StructureDetector for the parsed CFG
+     */
+    public static StructureDetector fromGraphviz(String dot) {
+        Node.resetIdCounter();
+        Map<String, Node> nodes = new LinkedHashMap<>();
+        Node firstNode = null;
+        
+        // Remove "digraph {" and "}" wrapper
+        String content = dot.trim();
+        if (content.startsWith("digraph")) {
+            int start = content.indexOf('{');
+            int end = content.lastIndexOf('}');
+            if (start != -1 && end != -1) {
+                content = content.substring(start + 1, end);
+            }
+        }
+        
+        // Parse each line/statement
+        String[] statements = content.split(";");
+        for (String statement : statements) {
+            statement = statement.trim();
+            if (statement.isEmpty()) continue;
+            
+            // Handle edge definitions (may be chained: a->b->c)
+            if (statement.contains("->")) {
+                String[] parts = statement.split("->");
+                for (int i = 0; i < parts.length - 1; i++) {
+                    String fromLabel = parts[i].trim();
+                    String toLabel = parts[i + 1].trim();
+                    
+                    // Get or create nodes
+                    Node fromNode = nodes.get(fromLabel);
+                    if (fromNode == null) {
+                        fromNode = new Node(fromLabel);
+                        nodes.put(fromLabel, fromNode);
+                        if (firstNode == null) {
+                            firstNode = fromNode;
+                        }
+                    }
+                    
+                    Node toNode = nodes.get(toLabel);
+                    if (toNode == null) {
+                        toNode = new Node(toLabel);
+                        nodes.put(toLabel, toNode);
+                    }
+                    
+                    // Add edge
+                    fromNode.addSuccessor(toNode);
+                }
+            }
+        }
+        
+        if (firstNode == null) {
+            throw new IllegalArgumentException("No nodes found in DOT string");
+        }
+        
+        return new StructureDetector(firstNode);
+    }
+
+    /**
+     * Returns the entry node of the CFG.
+     * 
+     * @return the entry node
+     */
+    public Node getEntryNode() {
+        return entryNode;
+    }
+
+    /**
      * Collects all nodes reachable from the entry node using BFS.
      */
     private List<Node> collectAllNodes(Node entry) {
@@ -698,22 +772,16 @@ public class StructureDetector {
     public static void main(String[] args) {
         // Example 1: Simple if-else
         System.out.println("===== Example 1: Simple If-Else =====");
-        Node.resetIdCounter();
-        Node entry1 = new Node("entry");
-        Node cond1 = new Node("if_cond");
-        Node thenBlock = new Node("then");
-        Node elseBlock = new Node("else");
-        Node merge1 = new Node("merge");
-        Node exit1 = new Node("exit");
-        
-        entry1.addSuccessor(cond1);
-        cond1.addSuccessor(thenBlock);  // true branch
-        cond1.addSuccessor(elseBlock);  // false branch
-        thenBlock.addSuccessor(merge1);
-        elseBlock.addSuccessor(merge1);
-        merge1.addSuccessor(exit1);
-        
-        StructureDetector detector1 = new StructureDetector(entry1);
+        StructureDetector detector1 = StructureDetector.fromGraphviz(
+            "digraph {\n" +
+            "  entry->if_cond;\n" +
+            "  if_cond->then;\n" +
+            "  if_cond->else;\n" +
+            "  then->merge;\n" +
+            "  else->merge;\n" +
+            "  merge->exit;\n" +
+            "}"
+        );
         detector1.analyze();
         System.out.println("\n--- Pseudocode ---");
         System.out.println(detector1.toPseudocode());
@@ -722,18 +790,14 @@ public class StructureDetector {
         
         // Example 2: While loop
         System.out.println("\n===== Example 2: While Loop =====");
-        Node.resetIdCounter();
-        Node entry2 = new Node("entry");
-        Node loopHeader = new Node("loop_header");
-        Node loopBody = new Node("loop_body");
-        Node exit2 = new Node("exit");
-        
-        entry2.addSuccessor(loopHeader);
-        loopHeader.addSuccessor(loopBody);  // continue loop
-        loopHeader.addSuccessor(exit2);     // exit loop
-        loopBody.addSuccessor(loopHeader);  // back edge
-        
-        StructureDetector detector2 = new StructureDetector(entry2);
+        StructureDetector detector2 = StructureDetector.fromGraphviz(
+            "digraph {\n" +
+            "  entry->loop_header;\n" +
+            "  loop_header->loop_body;\n" +
+            "  loop_header->exit;\n" +
+            "  loop_body->loop_header;\n" +
+            "}"
+        );
         detector2.analyze();
         System.out.println("\n--- Pseudocode ---");
         System.out.println(detector2.toPseudocode());
@@ -742,28 +806,20 @@ public class StructureDetector {
         
         // Example 3: Loop with break and continue
         System.out.println("\n===== Example 3: Loop with Break and Continue =====");
-        Node.resetIdCounter();
-        Node entry3 = new Node("entry");
-        Node header3 = new Node("loop_header");
-        Node body3_1 = new Node("body_1");
-        Node condBreak = new Node("cond_break");
-        Node body3_2 = new Node("body_2");
-        Node condContinue = new Node("cond_continue");
-        Node body3_3 = new Node("body_3");
-        Node exit3 = new Node("exit");
-        
-        entry3.addSuccessor(header3);
-        header3.addSuccessor(body3_1);    // enter loop
-        header3.addSuccessor(exit3);      // normal loop exit
-        body3_1.addSuccessor(condBreak);
-        condBreak.addSuccessor(body3_2);  // no break
-        condBreak.addSuccessor(exit3);    // break!
-        body3_2.addSuccessor(condContinue);
-        condContinue.addSuccessor(body3_3);   // no continue
-        condContinue.addSuccessor(header3);   // continue!
-        body3_3.addSuccessor(header3);        // normal back edge
-        
-        StructureDetector detector3 = new StructureDetector(entry3);
+        StructureDetector detector3 = StructureDetector.fromGraphviz(
+            "digraph {\n" +
+            "  entry->loop_header;\n" +
+            "  loop_header->body_1;\n" +
+            "  loop_header->exit;\n" +
+            "  body_1->cond_break;\n" +
+            "  cond_break->body_2;\n" +
+            "  cond_break->exit;\n" +
+            "  body_2->cond_continue;\n" +
+            "  cond_continue->body_3;\n" +
+            "  cond_continue->loop_header;\n" +
+            "  body_3->loop_header;\n" +
+            "}"
+        );
         detector3.analyze();
         System.out.println("\n--- Pseudocode ---");
         System.out.println(detector3.toPseudocode());
@@ -772,23 +828,17 @@ public class StructureDetector {
         
         // Example 4: Nested loops
         System.out.println("\n===== Example 4: Nested Loops =====");
-        Node.resetIdCounter();
-        Node entry4 = new Node("entry");
-        Node outerHeader = new Node("outer_header");
-        Node innerHeader = new Node("inner_header");
-        Node innerBody = new Node("inner_body");
-        Node outerEnd = new Node("outer_end");
-        Node exit4 = new Node("exit");
-        
-        entry4.addSuccessor(outerHeader);
-        outerHeader.addSuccessor(innerHeader);  // enter outer loop
-        outerHeader.addSuccessor(exit4);        // exit outer loop
-        innerHeader.addSuccessor(innerBody);    // enter inner loop
-        innerHeader.addSuccessor(outerEnd);     // exit inner loop
-        innerBody.addSuccessor(innerHeader);    // inner back edge
-        outerEnd.addSuccessor(outerHeader);     // outer back edge
-        
-        StructureDetector detector4 = new StructureDetector(entry4);
+        StructureDetector detector4 = StructureDetector.fromGraphviz(
+            "digraph {\n" +
+            "  entry->outer_header;\n" +
+            "  outer_header->inner_header;\n" +
+            "  outer_header->exit;\n" +
+            "  inner_header->inner_body;\n" +
+            "  inner_header->outer_end;\n" +
+            "  inner_body->inner_header;\n" +
+            "  outer_end->outer_header;\n" +
+            "}"
+        );
         detector4.analyze();
         System.out.println("\n--- Pseudocode ---");
         System.out.println(detector4.toPseudocode());
@@ -797,29 +847,40 @@ public class StructureDetector {
         
         // Example 5: If inside loop
         System.out.println("\n===== Example 5: If Inside Loop =====");
-        Node.resetIdCounter();
-        Node entry5 = new Node("entry");
-        Node loopHead5 = new Node("loop_header");
-        Node ifCond5 = new Node("if_cond");
-        Node ifThen5 = new Node("if_then");
-        Node ifElse5 = new Node("if_else");
-        Node loopEnd5 = new Node("loop_end");
-        Node exit5 = new Node("exit");
-        
-        entry5.addSuccessor(loopHead5);
-        loopHead5.addSuccessor(ifCond5);   // enter loop
-        loopHead5.addSuccessor(exit5);     // exit loop
-        ifCond5.addSuccessor(ifThen5);     // if true
-        ifCond5.addSuccessor(ifElse5);     // if false
-        ifThen5.addSuccessor(loopEnd5);
-        ifElse5.addSuccessor(loopEnd5);
-        loopEnd5.addSuccessor(loopHead5);  // back edge
-        
-        StructureDetector detector5 = new StructureDetector(entry5);
+        StructureDetector detector5 = StructureDetector.fromGraphviz(
+            "digraph {\n" +
+            "  entry->loop_header;\n" +
+            "  loop_header->if_cond;\n" +
+            "  loop_header->exit;\n" +
+            "  if_cond->if_then;\n" +
+            "  if_cond->if_else;\n" +
+            "  if_then->loop_end;\n" +
+            "  if_else->loop_end;\n" +
+            "  loop_end->loop_header;\n" +
+            "}"
+        );
         detector5.analyze();
         System.out.println("\n--- Pseudocode ---");
         System.out.println(detector5.toPseudocode());
         System.out.println("--- Graphviz/DOT ---");
         System.out.println(detector5.toGraphviz());
+        
+        // Example 6: Chained edges (demonstrating a->b->c syntax)
+        System.out.println("\n===== Example 6: Chained Edges =====");
+        StructureDetector detector6 = StructureDetector.fromGraphviz(
+            "digraph {\n" +
+            "  start->if1;\n" +
+            "  if1->ontrue;\n" +
+            "  if1->onfalse;\n" +
+            "  ontrue->merge;\n" +
+            "  onfalse->merge;\n" +
+            "  merge->after->exit;\n" +
+            "}"
+        );
+        detector6.analyze();
+        System.out.println("\n--- Pseudocode ---");
+        System.out.println(detector6.toPseudocode());
+        System.out.println("--- Graphviz/DOT ---");
+        System.out.println(detector6.toGraphviz());
     }
 }
