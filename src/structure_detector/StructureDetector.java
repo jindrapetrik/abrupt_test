@@ -275,6 +275,7 @@ public class StructureDetector {
         
         // Detect breaks within the block (edges that go to endNode from within the block)
         // Exclude edges that are normal loop exits (will be rendered as 'break;' from while(true))
+        // Also exclude edges that are just normal merge points of if-statements
         for (Node node : body) {
             for (Node succ : node.succs) {
                 if (succ.equals(endNode)) {
@@ -289,7 +290,12 @@ public class StructureDetector {
                         }
                     }
                     
-                    if (!isNormalLoopExit) {
+                    // Check if this is just a normal merge of an if-statement (not a real break)
+                    // If endNode is the natural convergence point for ALL paths from this node,
+                    // then it's not a labeled break, it's just normal flow
+                    boolean isNormalMerge = isNormalMergePoint(node, endNode, body);
+                    
+                    if (!isNormalLoopExit && !isNormalMerge) {
                         block.breaks.add(new LabeledBreakEdge(node, endNode, label));
                     }
                 }
@@ -297,6 +303,120 @@ public class StructureDetector {
         }
         
         labeledBlocks.add(block);
+    }
+    
+    /**
+     * Checks if endNode is the natural merge point for all paths from node within the body.
+     * If all paths from node converge at endNode without any branching to other destinations,
+     * then endNode is a natural merge point (not a labeled break).
+     * 
+     * For single-successor nodes, we need to check if this node is on a "skip" path - i.e.,
+     * a path that bypasses other code in the block. If there are other, longer paths from
+     * the block that go through more code before reaching endNode, then this is a skip.
+     */
+    private boolean isNormalMergePoint(Node node, Node endNode, Set<Node> body) {
+        // If node has only one successor (going to endNode), we need to check if this
+        // is on a "skip" path. We do this by checking if node's predecessors have
+        // other paths that would go through more code before reaching endNode.
+        if (node.succs.size() <= 1) {
+            // Check if this node is on a conditional branch where the other branch
+            // goes through more code before reaching endNode
+            for (Node pred : node.preds) {
+                if (body.contains(pred) && pred.succs.size() >= 2) {
+                    // This node is the successor of a conditional
+                    // Check if OTHER successors of that conditional lead to longer paths
+                    for (Node otherSucc : pred.succs) {
+                        if (!otherSucc.equals(node) && body.contains(otherSucc)) {
+                            // Check if the other path reaches endNode eventually
+                            // and goes through different/more nodes
+                            int pathLengthFromThis = shortestPathLength(node, endNode, body);
+                            int pathLengthFromOther = shortestPathLength(otherSucc, endNode, body);
+                            
+                            // If the other path is longer, this path is a "skip"
+                            if (pathLengthFromOther > pathLengthFromThis) {
+                                return false; // Not a normal merge, it's a skip
+                            }
+                        }
+                    }
+                }
+            }
+            // No skip detected, it's normal flow
+            return true;
+        }
+        
+        // For a conditional node (2 successors), check if BOTH branches eventually
+        // lead only to endNode (i.e., endNode is the merge point of this conditional)
+        // This means the edge to endNode is just the normal merge, not a labeled break
+        for (Node succ : node.succs) {
+            if (succ.equals(endNode)) {
+                continue; // This is the edge we're checking
+            }
+            // Check if the other branch eventually reaches endNode through simple paths
+            if (!allPathsLeadTo(succ, endNode, body, new HashSet<>())) {
+                // The other branch doesn't exclusively lead to endNode
+                // So this might be a real labeled break
+                return false;
+            }
+        }
+        
+        // All other branches lead to endNode, so this is a normal merge
+        return true;
+    }
+    
+    /**
+     * Returns the shortest path length from start to target within body.
+     * Returns Integer.MAX_VALUE if no path exists.
+     */
+    private int shortestPathLength(Node start, Node target, Set<Node> body) {
+        if (start.equals(target)) {
+            return 0;
+        }
+        
+        Map<Node, Integer> dist = new HashMap<>();
+        Queue<Node> queue = new LinkedList<>();
+        queue.add(start);
+        dist.put(start, 0);
+        
+        while (!queue.isEmpty()) {
+            Node current = queue.poll();
+            int currentDist = dist.get(current);
+            
+            for (Node succ : current.succs) {
+                if (succ.equals(target)) {
+                    return currentDist + 1;
+                }
+                if (body.contains(succ) && !dist.containsKey(succ)) {
+                    dist.put(succ, currentDist + 1);
+                    queue.add(succ);
+                }
+            }
+        }
+        
+        return Integer.MAX_VALUE;
+    }
+    
+    /**
+     * Checks if all paths from start within body lead to target.
+     */
+    private boolean allPathsLeadTo(Node start, Node target, Set<Node> body, Set<Node> visited) {
+        if (start.equals(target)) {
+            return true;
+        }
+        if (!body.contains(start) || visited.contains(start)) {
+            return false;
+        }
+        visited.add(start);
+        
+        if (start.succs.isEmpty()) {
+            return false; // Dead end that's not the target
+        }
+        
+        for (Node succ : start.succs) {
+            if (!allPathsLeadTo(succ, target, body, visited)) {
+                return false;
+            }
+        }
+        return true;
     }
 
     /**
@@ -1722,8 +1842,9 @@ public class StructureDetector {
             
             // Check if this node is a labeled block's end node
             // This takes priority because it represents continue semantics
+            // Only report as labeled break if the block has actual breaks that need labeling
             for (LabeledBlockStructure block : labeledBlocks) {
-                if (current.equals(block.endNode)) {
+                if (current.equals(block.endNode) && !block.breaks.isEmpty()) {
                     // This path leads to a labeled block's end node - it's a break to that block
                     return new BranchTargetResult(current, block.label, true);
                 }
