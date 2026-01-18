@@ -2046,6 +2046,26 @@ public class StructureDetector {
                         return;
                     }
                     
+                    // C) Special case: true branch breaks to labeled block, false branch breaks to loop
+                    // Transform: if (cond) { ...something2; break block; } ...something3; break loop;
+                    // Into:      if (!cond) { ...something3; break loop; } ...something2;
+                    // This puts the loop-breaking path inside the if, and the block-continuing path flows naturally
+                    if (trueBranchTarget != null && trueBranchTarget.isLabeledBlockBreak && 
+                        falseBranchTarget != null && !falseBranchTarget.isLabeledBlockBreak) {
+                        sb.append(indent).append("if (!").append(node.getLabel()).append(") {\n");
+                        List<Node> falsePath = findPathToTarget(ifStruct.falseBranch, falseBranchTarget.target, ifConditions);
+                        outputPathAndBreak(falsePath, falseBranchTarget.breakLabel, sb, indent + "    ", currentLoop, currentBlock);
+                        sb.append(indent).append("}\n");
+                        // Continue with true branch content at same indent level (flattened), without the final break
+                        List<Node> truePath = findPathToTarget(ifStruct.trueBranch, trueBranchTarget.target, ifConditions);
+                        for (Node n : truePath) {
+                            sb.append(indent).append(n.getLabel()).append(";\n");
+                        }
+                        // Note: We don't output "break block_label" here because the code naturally flows
+                        // to the end of the block after the true branch content
+                        return;
+                    }
+                    
                     // B) If true branch leads to break, flatten the else
                     if (trueBranchTarget != null) {
                         sb.append(indent).append("if (").append(node.getLabel()).append(") {\n");
@@ -2182,6 +2202,25 @@ public class StructureDetector {
                     // Output the common false branch path and break
                     List<Node> falsePath = findPathToTarget(ifStruct.falseBranch, falseBranchTarget.target, ifConditions);
                     outputPathAndBreak(falsePath, falseBranchTarget.breakLabel, sb, indent, currentLoop, currentBlock);
+                    return;
+                }
+                
+                // D) Special case: true branch breaks to labeled block, false branch breaks to loop
+                // Transform: if (cond) { ...something2; break block; } ...something3; break loop;
+                // Into:      if (!cond) { ...something3; break loop; } ...something2;
+                // This puts the loop-breaking path inside the if, and the block-continuing path flows naturally
+                if (trueBranchTarget.isLabeledBlockBreak && falseBranchTarget != null && !falseBranchTarget.isLabeledBlockBreak) {
+                    sb.append(indent).append("if (!").append(node.getLabel()).append(") {\n");
+                    List<Node> falsePath = findPathToTarget(ifStruct.falseBranch, falseBranchTarget.target, ifConditions);
+                    outputPathAndBreak(falsePath, falseBranchTarget.breakLabel, sb, indent + "    ", currentLoop, currentBlock);
+                    sb.append(indent).append("}\n");
+                    // Continue with true branch content at same indent level (flattened), without the final break
+                    List<Node> truePath = findPathToTarget(ifStruct.trueBranch, trueBranchTarget.target, ifConditions);
+                    for (Node n : truePath) {
+                        sb.append(indent).append(n.getLabel()).append(";\n");
+                    }
+                    // Note: We don't output "break block_label" here because the code naturally flows
+                    // to the end of the block after the true branch content
                     return;
                 }
                 
