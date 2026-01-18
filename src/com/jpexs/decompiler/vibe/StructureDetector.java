@@ -206,6 +206,27 @@ public class StructureDetector {
                     // Add edge
                     fromNode.addSuccessor(toNode);
                 }
+            } else if (statement.contains("[")) {
+                // Handle standalone node with attributes: nodeName [key1=value1 key2="value2" ...]
+                int bracketStart = statement.indexOf('[');
+                int bracketEnd = statement.lastIndexOf(']');
+                if (bracketStart != -1 && bracketEnd != -1 && bracketEnd > bracketStart) {
+                    String nodeLabel = statement.substring(0, bracketStart).trim();
+                    String attributesStr = statement.substring(bracketStart + 1, bracketEnd).trim();
+                    
+                    // Get or create the node
+                    Node node = nodes.get(nodeLabel);
+                    if (node == null) {
+                        node = new Node(nodeLabel);
+                        nodes.put(nodeLabel, node);
+                        if (firstNode == null) {
+                            firstNode = node;
+                        }
+                    }
+                    
+                    // Parse attributes
+                    parseAndSetAttributes(node, attributesStr, dotDialect);
+                }
             }
         }
         
@@ -214,6 +235,91 @@ public class StructureDetector {
         }
         
         return new StructureDetector(firstNode, dotDialect);
+    }
+    
+    /**
+     * Parses DOT attribute string and sets attributes on the node.
+     * Handles both quoted and unquoted keys and values.
+     * Format: key1=value1 "key2"=value2 key3="value3" "key4"="value 4"
+     * 
+     * @param node the node to set attributes on
+     * @param attributesStr the attributes string (content between [ and ])
+     * @param dotDialect the DOT dialect for setting attributes
+     */
+    private static void parseAndSetAttributes(Node node, String attributesStr, DotDialect dotDialect) {
+        int pos = 0;
+        int len = attributesStr.length();
+        
+        while (pos < len) {
+            // Skip whitespace
+            while (pos < len && Character.isWhitespace(attributesStr.charAt(pos))) {
+                pos++;
+            }
+            if (pos >= len) break;
+            
+            // Parse key (may be quoted or unquoted identifier)
+            String key;
+            if (attributesStr.charAt(pos) == '"') {
+                // Quoted key
+                int endQuote = attributesStr.indexOf('"', pos + 1);
+                if (endQuote == -1) break;
+                key = attributesStr.substring(pos + 1, endQuote);
+                pos = endQuote + 1;
+            } else {
+                // Unquoted identifier
+                int start = pos;
+                while (pos < len && isIdentifierChar(attributesStr.charAt(pos))) {
+                    pos++;
+                }
+                if (pos == start) break;
+                key = attributesStr.substring(start, pos);
+            }
+            
+            // Skip whitespace before '='
+            while (pos < len && Character.isWhitespace(attributesStr.charAt(pos))) {
+                pos++;
+            }
+            
+            // Expect '='
+            if (pos >= len || attributesStr.charAt(pos) != '=') {
+                break;
+            }
+            pos++; // Skip '='
+            
+            // Skip whitespace after '='
+            while (pos < len && Character.isWhitespace(attributesStr.charAt(pos))) {
+                pos++;
+            }
+            if (pos >= len) break;
+            
+            // Parse value (may be quoted or unquoted identifier)
+            String value;
+            if (attributesStr.charAt(pos) == '"') {
+                // Quoted value
+                int endQuote = attributesStr.indexOf('"', pos + 1);
+                if (endQuote == -1) break;
+                value = attributesStr.substring(pos + 1, endQuote);
+                pos = endQuote + 1;
+            } else {
+                // Unquoted identifier
+                int start = pos;
+                while (pos < len && isIdentifierChar(attributesStr.charAt(pos))) {
+                    pos++;
+                }
+                if (pos == start) break;
+                value = attributesStr.substring(start, pos);
+            }
+            
+            // Set the attribute
+            dotDialect.setAttribute(node, key, value);
+        }
+    }
+    
+    /**
+     * Checks if a character is valid in an unquoted DOT identifier.
+     */
+    private static boolean isIdentifierChar(char c) {
+        return Character.isLetterOrDigit(c) || c == '_';
     }
 
     /**
