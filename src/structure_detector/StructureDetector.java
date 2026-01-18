@@ -2609,6 +2609,7 @@ public class StructureDetector {
      * Generates statements for a catch body that is inside a loop.
      * Handles continue statements when catch body has edges back to the loop header.
      * Handles break statements when catch body has edges outside the loop.
+     * Handles if-conditions within the catch body.
      */
     private List<Statement> generateCatchBodyInLoop(Node startNode, Set<Node> catchBody, Set<Node> visited,
                                                Map<Node, LoopStructure> loopHeaders, Map<Node, IfStructure> ifConditions,
@@ -2624,7 +2625,62 @@ public class StructureDetector {
         
         visited.add(startNode);
         
-        // Output the statement
+        // Check if this is an if-condition with 2 successors
+        if (startNode.succs.size() == 2) {
+            Node trueSucc = startNode.succs.get(0);
+            Node falseSucc = startNode.succs.get(1);
+            
+            // Determine which branch is inside the catch body and which exits the loop
+            boolean trueInCatch = catchBody.contains(trueSucc);
+            boolean falseInCatch = catchBody.contains(falseSucc);
+            boolean trueIsBreak = currentLoop != null && !currentLoop.body.contains(trueSucc);
+            boolean falseIsBreak = currentLoop != null && !currentLoop.body.contains(falseSucc);
+            boolean trueIsContinue = currentLoop != null && trueSucc.equals(currentLoop.header);
+            boolean falseIsContinue = currentLoop != null && falseSucc.equals(currentLoop.header);
+            
+            // Case: one branch exits (break/continue), the other continues in catch body
+            if ((trueIsBreak || trueIsContinue) && (falseInCatch || falseIsBreak || falseIsContinue)) {
+                // True branch exits the loop
+                List<Statement> trueBody = new ArrayList<>();
+                if (trueIsBreak) {
+                    trueBody.add(new BreakStatement());
+                } else if (trueIsContinue) {
+                    trueBody.add(new ContinueStatement());
+                }
+                result.add(new IfStatement(startNode.getLabel(), false, trueBody));
+                
+                // Process false branch (the rest of catch body or exit)
+                if (falseInCatch && !visited.contains(falseSucc)) {
+                    result.addAll(generateCatchBodyInLoop(falseSucc, catchBody, visited,
+                                    loopHeaders, ifConditions, blockStarts, labeledBreakEdges,
+                                    loopsNeedingLabels, currentLoop, currentBlock, switchStarts));
+                } else if (falseIsBreak) {
+                    result.add(new BreakStatement());
+                } else if (falseIsContinue) {
+                    result.add(new ContinueStatement());
+                }
+                return result;
+            } else if ((falseIsBreak || falseIsContinue) && trueInCatch) {
+                // False branch exits, true branch continues
+                List<Statement> falseBody = new ArrayList<>();
+                if (falseIsBreak) {
+                    falseBody.add(new BreakStatement());
+                } else if (falseIsContinue) {
+                    falseBody.add(new ContinueStatement());
+                }
+                result.add(new IfStatement(startNode.getLabel(), true, falseBody));  // negated condition
+                
+                // Process true branch (the rest of catch body)
+                if (!visited.contains(trueSucc)) {
+                    result.addAll(generateCatchBodyInLoop(trueSucc, catchBody, visited,
+                                    loopHeaders, ifConditions, blockStarts, labeledBreakEdges,
+                                    loopsNeedingLabels, currentLoop, currentBlock, switchStarts));
+                }
+                return result;
+            }
+        }
+        
+        // Default: output the statement
         result.add(new ExpressionStatement(startNode.getLabel()));
         
         // Check successors
@@ -4770,12 +4826,13 @@ public class StructureDetector {
             "  cond->end;\n" +
             "  cond->a;\n" +
             "  c1->end;\n" +
+            "  c1->d;\n" +
             "  c2->cond;\n" +
             "  a->after_try;\n" +
             "  after_try->cond;\n" +
             "  end;\n" +
             "}",
-            "a => c1; " +
+            "a => c1, d; " +
             "a => c2"
         );
     }
