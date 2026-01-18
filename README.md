@@ -11,7 +11,7 @@ The project is still a work in progress...
 ### Basic Usage
 
 ```java
-import structure_detector.StructureDetector;
+import com.jpexs.decompiler.vibe.StructureDetector;
 
 // Create a StructureDetector from Graphviz/DOT format
 String dot = "digraph { start->a; a->b; a->c; b->d; c->d; d->end; }";
