@@ -2903,8 +2903,9 @@ public class StructureDetector {
             // Check if this node is a labeled block's end node
             // This takes priority because it represents continue semantics
             // Only report as labeled break if the block has actual breaks that need labeling
+            // But skip the return block (r_block) - that's handled specially for return nodes only
             for (LabeledBlockStructure block : labeledBlocks) {
-                if (current.equals(block.endNode) && !block.breaks.isEmpty()) {
+                if (current.equals(block.endNode) && !block.breaks.isEmpty() && !block.label.equals(RETURN_BLOCK_LABEL)) {
                     // This path leads to a labeled block's end node - it's a break to that block
                     return new BranchTargetResult(current, block.label, true);
                 }
