@@ -1025,6 +1025,103 @@ public class StructureDetector {
                 }
             }
         }
+        
+        // Detect labeled blocks for inner-loop-to-outer-convergence patterns:
+        // When a break from an inner loop leads to the same point as the normal loop exit path,
+        // we need a block around the inner loop that ends at the convergence point.
+        detectInnerLoopSkipBlocks(loops, mainLoops, ifs);
+    }
+    
+    /**
+     * Detects labeled blocks for patterns where breaking out of an inner loop
+     * leads to the same convergence point as the normal loop exit path.
+     * 
+     * Example: when loop_b_cond=false goes to trace_hello->my_cont,
+     * and a break from inside the loop goes to trace_Y->my_cont,
+     * we need a block around the inner loop + trace_hello that ends at my_cont.
+     */
+    private void detectInnerLoopSkipBlocks(List<LoopStructure> loops, Map<Node, LoopStructure> mainLoops, List<IfStructure> ifs) {
+        for (LoopStructure outerLoop : mainLoops.values()) {
+            for (LoopStructure innerLoop : loops) {
+                // Check if innerLoop is nested in outerLoop
+                if (!outerLoop.body.contains(innerLoop.header)) continue;
+                if (innerLoop.equals(outerLoop)) continue;
+                
+                // Find the normal exit path from inner loop (loop condition false branch)
+                IfStructure loopCondIf = null;
+                for (IfStructure ifStruct : ifs) {
+                    if (ifStruct.conditionNode.equals(innerLoop.header)) {
+                        loopCondIf = ifStruct;
+                        break;
+                    }
+                }
+                if (loopCondIf == null) continue;
+                
+                // The normal exit path is the false branch of the loop condition
+                Node normalExitStart = loopCondIf.falseBranch;
+                if (normalExitStart == null || !outerLoop.body.contains(normalExitStart)) continue;
+                
+                // Find the convergence point - where the normal exit path leads to
+                // This is typically the first successor of the normal exit start
+                // that could also be reached by skipping the normal exit path
+                Node convergencePoint = null;
+                if (normalExitStart.succs.size() == 1) {
+                    convergencePoint = normalExitStart.succs.get(0);
+                } else if (normalExitStart.succs.size() > 1) {
+                    // normalExitStart is a condition, use its merge point
+                    for (IfStructure ifStruct : ifs) {
+                        if (ifStruct.conditionNode.equals(normalExitStart)) {
+                            convergencePoint = ifStruct.mergeNode;
+                            break;
+                        }
+                    }
+                }
+                if (convergencePoint == null || !outerLoop.body.contains(convergencePoint)) continue;
+                
+                // Check if any break from inside the inner loop leads directly to convergencePoint
+                boolean hasSkipPattern = false;
+                for (BreakEdge breakEdge : innerLoop.breaks) {
+                    Node breakTarget = breakEdge.to;
+                    // Follow the path from breakTarget
+                    Node current = breakTarget;
+                    Set<Node> visited = new HashSet<>();
+                    while (current != null && outerLoop.body.contains(current) && !visited.contains(current)) {
+                        visited.add(current);
+                        if (current.equals(convergencePoint)) {
+                            hasSkipPattern = true;
+                            break;
+                        }
+                        // Don't follow through normalExitStart (that's the normal path)
+                        if (current.equals(normalExitStart)) break;
+                        // Follow single-successor chains
+                        if (current.succs.size() == 1) {
+                            current = current.succs.get(0);
+                        } else {
+                            break;
+                        }
+                    }
+                    if (hasSkipPattern) break;
+                }
+                
+                if (hasSkipPattern) {
+                    // Create a block from inner loop header to convergence point
+                    String label = innerLoop.header.getLabel() + "_block";
+                    
+                    // Check if this block already exists
+                    boolean exists = false;
+                    for (LabeledBlockStructure block : labeledBlocks) {
+                        if (block.startNode.equals(innerLoop.header) && block.endNode.equals(convergencePoint)) {
+                            exists = true;
+                            break;
+                        }
+                    }
+                    
+                    if (!exists) {
+                        addLabeledBlock(label, innerLoop.header, convergencePoint, mainLoops);
+                    }
+                }
+            }
+        }
     }
     
     // Helper class for skip patterns
