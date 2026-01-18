@@ -2212,14 +2212,19 @@ public class StructureDetector {
         // to exit the loop (not the labeled block). This is detected in outputPathAndBreak.
         Set<Node> loopsNeedingLabels = new HashSet<>();
         for (LoopStructure loop : loops) {
-            // Check if there's any labeled block inside this loop
-            // If so, breaks inside that block might need to target this loop explicitly
+            // Check if there's any labeled block inside this loop with breaks
+            // that could potentially target this loop
             for (LabeledBlockStructure block : labeledBlocks) {
-                if (loop.body.contains(block.startNode)) {
-                    // This labeled block is inside the loop
-                    // The loop needs a label because breaks inside the block might target the loop
-                    loopsNeedingLabels.add(loop.header);
-                    break;
+                if (loop.body.contains(block.startNode) && !block.breaks.isEmpty()) {
+                    // This labeled block is inside the loop AND has breaks
+                    // Check if any break targets the loop's exit (outside the loop body)
+                    for (LabeledBreakEdge breakEdge : block.breaks) {
+                        if (!loop.body.contains(breakEdge.to)) {
+                            // This break exits the loop, so the loop needs a label
+                            loopsNeedingLabels.add(loop.header);
+                            break;
+                        }
+                    }
                 }
             }
         }
