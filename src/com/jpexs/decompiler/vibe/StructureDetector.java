@@ -1702,11 +1702,36 @@ public class StructureDetector {
         switchStructures.clear();
         switchStructures.addAll(detectSwitches(ifs));
         
-        // Automatically detect labeled blocks for continue semantics
-        detectContinueBlocks(loops);
-        
-        // Automatically detect labeled blocks for skip patterns
+        // Automatically detect labeled blocks for skip patterns (outside of loops first)
         detectSkipBlocks(ifs);
+        
+        // Pre-assign loop labels before detecting blocks inside loops
+        // This ensures loops get sequential numbers before their inner blocks
+        for (LoopStructure loop : loops) {
+            // Check if this loop will need a label (has breaks from inside labeled blocks)
+            boolean needsLabel = false;
+            for (LabeledBlockStructure block : labeledBlocks) {
+                if (loop.body.contains(block.startNode) && !block.breaks.isEmpty()) {
+                    for (LabeledBreakEdge breakEdge : block.breaks) {
+                        if (!loop.body.contains(breakEdge.to)) {
+                            needsLabel = true;
+                            break;
+                        }
+                    }
+                }
+                if (needsLabel) break;
+            }
+            // Also check for breaks that exit the loop from the loop structure itself
+            if (!loop.breaks.isEmpty()) {
+                needsLabel = true;
+            }
+            if (needsLabel) {
+                getLoopLabel(loop.header);
+            }
+        }
+        
+        // Automatically detect labeled blocks for continue semantics (inside loops)
+        detectContinueBlocks(loops);
         
         // Automatically detect labeled blocks for "return" patterns (nodes with no successors)
         LabeledBlockStructure returnBlock = detectReturnBlocks(loops, ifs);
@@ -1767,6 +1792,19 @@ public class StructureDetector {
                             loopsNeedingLabels.add(loop.header);
                             break;
                         }
+                    }
+                }
+            }
+            
+            // Also check if there are loop breaks from inside a labeled block
+            // In this case, the IF condition that breaks needs to use the loop label
+            for (BreakEdge breakEdge : loop.breaks) {
+                // Check if this break originates from inside a labeled block
+                for (LabeledBlockStructure block : labeledBlocks) {
+                    if (block.body.contains(breakEdge.from)) {
+                        // The break is from inside a labeled block, so loop needs a label
+                        loopsNeedingLabels.add(loop.header);
+                        break;
                     }
                 }
             }
@@ -3979,7 +4017,7 @@ public class StructureDetector {
                 }
             }
             
-            if (conditionChain.size() < 2 || defaultBody == null) {
+            if (conditionChain.size() < 3 || defaultBody == null) {
                 continue;
             }
             
@@ -4157,11 +4195,19 @@ public class StructureDetector {
         }
         System.out.println();
         
-        // Auto-detect labeled blocks for continue semantics
-        detectContinueBlocks(loops);
-        
-        // Auto-detect labeled blocks for skip patterns (outside of loops)
+        // Auto-detect labeled blocks for skip patterns (outside of loops first)
         detectSkipBlocks(ifs);
+        
+        // Pre-assign loop labels before detecting blocks inside loops
+        // This ensures loops get sequential numbers before their inner blocks
+        for (LoopStructure loop : loops) {
+            if (!loop.breaks.isEmpty()) {
+                getLoopLabel(loop.header);
+            }
+        }
+        
+        // Auto-detect labeled blocks for continue semantics (inside loops)
+        detectContinueBlocks(loops);
         
         System.out.println("Labeled Block Structures (" + labeledBlocks.size() + "):");
         for (LabeledBlockStructure block : labeledBlocks) {
