@@ -1,4 +1,4 @@
-package structure_detector.statement;
+package com.jpexs.decompiler.vibe.statement;
 
 import java.util.ArrayList;
 import java.util.List;

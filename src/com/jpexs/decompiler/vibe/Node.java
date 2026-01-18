@@ -1,10 +1,14 @@
-package structure_detector;
+package com.jpexs.decompiler.vibe;
 
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.atomic.AtomicInteger;
 
+/**
+ * Node of Control Flow Graph (CFG)
+ * @author JPEXS
+ */
 public class Node {
     private static final AtomicInteger nextId = new AtomicInteger(0);
     
@@ -13,15 +17,34 @@ public class Node {
     public List<Node> preds = new ArrayList<>();
     public List<Node> succs = new ArrayList<>();
     
+    /**
+     * Custom data associated with this Node.
+     */
+    private Object customData;
+    
     public Node() {
         this.id = nextId.getAndIncrement();
-        this.label = "node" + id;
+        this.label = "node" + id;        
     }
     
     public Node(String label) {
         this.id = nextId.getAndIncrement();
-        this.label = label;
+        this.label = label;        
     }
+    
+    public Node(String label, Object customData) {
+        this.id = nextId.getAndIncrement();
+        this.label = label;
+        this.customData = customData;
+    }
+
+    public void setCustomData(Object customData) {
+        this.customData = customData;
+    }
+
+    public Object getCustomData() {
+        return customData;
+    }        
     
     public int getId() {
         return id;

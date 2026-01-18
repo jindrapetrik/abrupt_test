@@ -1,27 +1,27 @@
-package structure_detector.statement;
+package com.jpexs.decompiler.vibe.statement;
 
 /**
- * Represents a break statement with an optional label.
+ * Represents a continue statement with an optional label.
  * 
  * @author JPEXS
  */
-public class BreakStatement extends Statement {
+public class ContinueStatement extends Statement {
     
     private final String label;
     
     /**
-     * Creates a new unlabeled break statement.
+     * Creates a new unlabeled continue statement.
      */
-    public BreakStatement() {
+    public ContinueStatement() {
         this.label = null;
     }
     
     /**
-     * Creates a new labeled break statement.
+     * Creates a new labeled continue statement.
      * 
-     * @param label the label to break to (can be null for unlabeled break)
+     * @param label the label to continue to (can be null for unlabeled continue)
      */
-    public BreakStatement(String label) {
+    public ContinueStatement(String label) {
         this.label = label;
     }
     
@@ -35,9 +35,9 @@ public class BreakStatement extends Statement {
     }
     
     /**
-     * Checks if this is a labeled break.
+     * Checks if this is a labeled continue.
      * 
-     * @return true if this break has a label
+     * @return true if this continue has a label
      */
     public boolean hasLabel() {
         return label != null && !label.isEmpty();
@@ -51,9 +51,9 @@ public class BreakStatement extends Statement {
     @Override
     public String toString(String indent) {
         if (hasLabel()) {
-            return indent + "break " + label + ";\n";
+            return indent + "continue " + label + ";\n";
         } else {
-            return indent + "break;\n";
+            return indent + "continue;\n";
         }
     }
 }

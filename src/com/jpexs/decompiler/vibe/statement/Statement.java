@@ -1,4 +1,4 @@
-package structure_detector.statement;
+package com.jpexs.decompiler.vibe.statement;
 
 /**
  * Base class for all pseudocode statements.

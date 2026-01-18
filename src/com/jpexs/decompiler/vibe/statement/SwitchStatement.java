@@ -1,4 +1,4 @@
-package structure_detector.statement;
+package com.jpexs.decompiler.vibe.statement;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -70,14 +70,26 @@ public class SwitchStatement extends Statement {
     }
     
     private final List<Case> cases;
+    private final String label;
     
     /**
-     * Creates a new switch statement.
+     * Creates a new switch statement without a label.
      * 
      * @param cases the list of cases (including default)
      */
     public SwitchStatement(List<Case> cases) {
+        this(cases, null);
+    }
+    
+    /**
+     * Creates a new switch statement with an optional label.
+     * 
+     * @param cases the list of cases (including default)
+     * @param label the label for the switch (e.g., "loop1"), or null for no label
+     */
+    public SwitchStatement(List<Case> cases, String label) {
         this.cases = cases != null ? new ArrayList<>(cases) : new ArrayList<>();
+        this.label = label;
     }
     
     /**
@@ -89,6 +101,15 @@ public class SwitchStatement extends Statement {
         return new ArrayList<>(cases);
     }
     
+    /**
+     * Gets the label for this switch statement.
+     * 
+     * @return the label, or null if no label
+     */
+    public String getLabel() {
+        return label;
+    }
+    
     @Override
     public String toString() {
         return toString("");
@@ -98,8 +119,12 @@ public class SwitchStatement extends Statement {
     public String toString(String indent) {
         StringBuilder sb = new StringBuilder();
         
-        // Generate switch header
-        sb.append(indent).append("switch {\n");
+        // Generate switch header with optional label
+        sb.append(indent);
+        if (label != null && !label.isEmpty()) {
+            sb.append(label).append(":");
+        }
+        sb.append("switch {\n");
         
         String innerIndent = indent + "    ";
         String bodyIndent = indent + "        ";
