@@ -35,6 +35,12 @@ public class StructureDetector {
 
     private static final String RETURN_BLOCK_LABEL = "r_block";
     
+    /**
+     * Minimum number of chained conditions required to detect a switch structure.
+     * Set to 3 to avoid false positives with simple sequential if-else patterns.
+     */
+    private static final int MIN_SWITCH_CHAIN_SIZE = 3;
+    
     private final List<Node> allNodes;
     private final Node entryNode;
     private final List<LabeledBlockStructure> labeledBlocks = new ArrayList<>();
@@ -110,6 +116,32 @@ public class StructureDetector {
         globalLabelCounter = 0;
         loopLabels.clear();
         blockLabelMapping.clear();
+    }
+    
+    /**
+     * Detects labeled blocks and pre-assigns loop labels in the correct order.
+     * This ensures labels are numbered sequentially as they appear in the output:
+     * 1. First, blocks outside loops are detected (e.g., block_0)
+     * 2. Then, loops with breaks get their labels pre-assigned (e.g., loop_1)
+     * 3. Finally, blocks inside loops are detected (e.g., block_2, block_3)
+     * 
+     * @param loops the detected loop structures
+     * @param ifs the detected if structures
+     */
+    private void detectBlocksAndPreAssignLoopLabels(List<LoopStructure> loops, List<IfStructure> ifs) {
+        // First, detect labeled blocks for skip patterns (outside of loops)
+        detectSkipBlocks(ifs);
+        
+        // Pre-assign loop labels before detecting blocks inside loops
+        // This ensures loops get sequential numbers before their inner blocks
+        for (LoopStructure loop : loops) {
+            if (!loop.breaks.isEmpty()) {
+                getLoopLabel(loop.header);
+            }
+        }
+        
+        // Then, detect labeled blocks for continue semantics (inside loops)
+        detectContinueBlocks(loops);
     }
 
     /**
@@ -1702,36 +1734,8 @@ public class StructureDetector {
         switchStructures.clear();
         switchStructures.addAll(detectSwitches(ifs));
         
-        // Automatically detect labeled blocks for skip patterns (outside of loops first)
-        detectSkipBlocks(ifs);
-        
-        // Pre-assign loop labels before detecting blocks inside loops
-        // This ensures loops get sequential numbers before their inner blocks
-        for (LoopStructure loop : loops) {
-            // Check if this loop will need a label (has breaks from inside labeled blocks)
-            boolean needsLabel = false;
-            for (LabeledBlockStructure block : labeledBlocks) {
-                if (loop.body.contains(block.startNode) && !block.breaks.isEmpty()) {
-                    for (LabeledBreakEdge breakEdge : block.breaks) {
-                        if (!loop.body.contains(breakEdge.to)) {
-                            needsLabel = true;
-                            break;
-                        }
-                    }
-                }
-                if (needsLabel) break;
-            }
-            // Also check for breaks that exit the loop from the loop structure itself
-            if (!loop.breaks.isEmpty()) {
-                needsLabel = true;
-            }
-            if (needsLabel) {
-                getLoopLabel(loop.header);
-            }
-        }
-        
-        // Automatically detect labeled blocks for continue semantics (inside loops)
-        detectContinueBlocks(loops);
+        // Detect blocks and pre-assign loop labels in correct order
+        detectBlocksAndPreAssignLoopLabels(loops, ifs);
         
         // Automatically detect labeled blocks for "return" patterns (nodes with no successors)
         LabeledBlockStructure returnBlock = detectReturnBlocks(loops, ifs);
@@ -4017,7 +4021,7 @@ public class StructureDetector {
                 }
             }
             
-            if (conditionChain.size() < 3 || defaultBody == null) {
+            if (conditionChain.size() < MIN_SWITCH_CHAIN_SIZE || defaultBody == null) {
                 continue;
             }
             
@@ -4195,19 +4199,8 @@ public class StructureDetector {
         }
         System.out.println();
         
-        // Auto-detect labeled blocks for skip patterns (outside of loops first)
-        detectSkipBlocks(ifs);
-        
-        // Pre-assign loop labels before detecting blocks inside loops
-        // This ensures loops get sequential numbers before their inner blocks
-        for (LoopStructure loop : loops) {
-            if (!loop.breaks.isEmpty()) {
-                getLoopLabel(loop.header);
-            }
-        }
-        
-        // Auto-detect labeled blocks for continue semantics (inside loops)
-        detectContinueBlocks(loops);
+        // Detect blocks and pre-assign loop labels in correct order
+        detectBlocksAndPreAssignLoopLabels(loops, ifs);
         
         System.out.println("Labeled Block Structures (" + labeledBlocks.size() + "):");
         for (LabeledBlockStructure block : labeledBlocks) {
