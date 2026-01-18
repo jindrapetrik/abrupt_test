@@ -1706,6 +1706,147 @@ public class StructureDetector {
     }
 
     /**
+     * Detects labeled blocks for "return" patterns - nodes with no successors
+     * that are reachable from within loops but are not the normal exit node.
+     * These nodes represent early exits (like return statements) and need
+     * a top-level labeled block to properly break out of all enclosing structures.
+     * 
+     * @param loops the detected loops
+     * @param ifs the detected if structures
+     * @return the return block if one was created, null otherwise
+     */
+    private LabeledBlockStructure detectReturnBlocks(List<LoopStructure> loops, List<IfStructure> ifs) {
+        // Find the normal exit node (typically the last node reachable from all paths)
+        // This is usually the node that the main loop condition branches to on false
+        Node exitNode = null;
+        
+        // Find nodes with no successors
+        List<Node> terminalNodes = new ArrayList<>();
+        for (Node node : allNodes) {
+            if (node.succs.isEmpty()) {
+                terminalNodes.add(node);
+            }
+        }
+        
+        if (terminalNodes.isEmpty()) {
+            return null;
+        }
+        
+        // If there's only one terminal node, it's the normal exit - no return block needed
+        if (terminalNodes.size() == 1) {
+            return null;
+        }
+        
+        // Find the "normal" exit node - the one that's reachable from the outermost loop's
+        // false branch (i.e., the natural exit when loop condition is false)
+        for (LoopStructure loop : loops) {
+            // Find the outermost loop (not contained in any other loop)
+            boolean isOutermost = true;
+            for (LoopStructure other : loops) {
+                if (other != loop && other.body.contains(loop.header)) {
+                    isOutermost = false;
+                    break;
+                }
+            }
+            
+            if (isOutermost) {
+                // Find the if structure for this loop's header
+                for (IfStructure ifStruct : ifs) {
+                    if (ifStruct.conditionNode.equals(loop.header)) {
+                        // The false branch leads to exit
+                        Node falseBranch = ifStruct.falseBranch;
+                        if (terminalNodes.contains(falseBranch)) {
+                            exitNode = falseBranch;
+                        } else {
+                            // Follow the path to find exit
+                            Node current = falseBranch;
+                            Set<Node> visited = new HashSet<>();
+                            while (current != null && !visited.contains(current)) {
+                                visited.add(current);
+                                if (terminalNodes.contains(current)) {
+                                    exitNode = current;
+                                    break;
+                                }
+                                if (current.succs.size() == 1) {
+                                    current = current.succs.get(0);
+                                } else {
+                                    break;
+                                }
+                            }
+                        }
+                        break;
+                    }
+                }
+                break;
+            }
+        }
+        
+        // Find "return" nodes - terminal nodes that are NOT the normal exit
+        // and are reachable from within loops
+        List<Node> returnNodes = new ArrayList<>();
+        for (Node terminal : terminalNodes) {
+            if (!terminal.equals(exitNode)) {
+                // Check if this terminal is reachable from within any loop
+                for (LoopStructure loop : loops) {
+                    for (Node loopNode : loop.body) {
+                        if (loopNode.succs.contains(terminal)) {
+                            returnNodes.add(terminal);
+                            break;
+                        }
+                    }
+                    if (returnNodes.contains(terminal)) break;
+                }
+            }
+        }
+        
+        if (returnNodes.isEmpty()) {
+            return null;
+        }
+        
+        // We need a top-level labeled block
+        // Find the start node (first node after entry that leads to a loop)
+        Node blockStart = null;
+        for (Node succ : entryNode.succs) {
+            blockStart = succ;
+            break;
+        }
+        
+        if (blockStart == null || exitNode == null) {
+            return null;
+        }
+        
+        // Create the return block
+        String label = "r_block";
+        
+        // Check if this block already exists
+        for (LabeledBlockStructure block : labeledBlocks) {
+            if (block.label.equals(label)) {
+                return block;
+            }
+        }
+        
+        // Create labeled block body - all nodes except entry
+        Set<Node> body = new HashSet<>(allNodes);
+        body.remove(entryNode);
+        
+        LabeledBlockStructure returnBlock = new LabeledBlockStructure(label, blockStart, exitNode, body);
+        
+        // Add break edges for each return node
+        for (Node returnNode : returnNodes) {
+            // Find nodes that lead to this return node
+            for (Node node : allNodes) {
+                if (node.succs.contains(returnNode)) {
+                    returnBlock.breaks.add(new LabeledBreakEdge(returnNode, exitNode, label));
+                    break;
+                }
+            }
+        }
+        
+        labeledBlocks.add(returnBlock);
+        return returnBlock;
+    }
+
+    /**
      * Generates a Graphviz/DOT representation of the CFG.
      * 
      * @return DOT format string representing the CFG
@@ -1742,6 +1883,9 @@ public class StructureDetector {
         // Automatically detect labeled blocks for skip patterns
         detectSkipBlocks(ifs);
         
+        // Automatically detect labeled blocks for "return" patterns (nodes with no successors)
+        LabeledBlockStructure returnBlock = detectReturnBlocks(loops, ifs);
+        
         // Create lookup maps for quick access
         Map<Node, LoopStructure> loopHeaders = new HashMap<>();
         for (LoopStructure loop : loops) {
@@ -1757,9 +1901,13 @@ public class StructureDetector {
             ifConditions.put(ifStruct.conditionNode, ifStruct);
         }
         
-        // Create lookup maps for labeled blocks
+        // Create lookup maps for labeled blocks (exclude return block from starts to not interfere with loops)
         Map<Node, LabeledBlockStructure> blockStarts = new HashMap<>();
         for (LabeledBlockStructure block : labeledBlocks) {
+            // Don't add return block to blockStarts - it's handled specially at top level
+            if (returnBlock != null && block.label.equals("r_block")) {
+                continue;
+            }
             blockStarts.put(block.startNode, block);
         }
         
@@ -1788,7 +1936,25 @@ public class StructureDetector {
             }
         }
         
-        generatePseudocode(entryNode, visited, sb, "", loopHeaders, ifConditions, blockStarts, labeledBreakEdges, loopsNeedingLabels, null, null, null);
+        // If there's a return block, wrap output in it
+        if (returnBlock != null) {
+            // Output entry node first
+            sb.append(entryNode.getLabel()).append(";\n");
+            visited.add(entryNode);
+            
+            // Start the return block
+            sb.append(returnBlock.label).append(": {\n");
+            
+            // Generate the rest of the code inside the block
+            for (Node succ : entryNode.succs) {
+                generatePseudocode(succ, visited, sb, "    ", loopHeaders, ifConditions, blockStarts, labeledBreakEdges, loopsNeedingLabels, null, returnBlock, null);
+            }
+            
+            // End the return block
+            sb.append("}\n");
+        } else {
+            generatePseudocode(entryNode, visited, sb, "", loopHeaders, ifConditions, blockStarts, labeledBreakEdges, loopsNeedingLabels, null, null, null);
+        }
         
         return sb.toString();
     }
@@ -2144,7 +2310,7 @@ public class StructureDetector {
                     if (trueBranchIsLoopHeader && falseBranchTarget != null) {
                         sb.append(indent).append("if (!").append(node.getLabel()).append(") {\n");
                         List<Node> falsePath = findPathToTarget(ifStruct.falseBranch, falseBranchTarget.target, ifConditions);
-                        outputPathAndBreak(falsePath, falseBranchTarget.breakLabel, sb, indent + "    ", currentLoop, currentBlock);
+                        outputPathAndBreak(falsePath, falseBranchTarget.breakLabel, sb, indent + "    ", currentLoop, currentBlock, falseBranchTarget.target);
                         sb.append(indent).append("}\n");
                         return;
                     }
@@ -2153,7 +2319,7 @@ public class StructureDetector {
                     if (falseBranchIsLoopHeader && trueBranchTarget != null) {
                         sb.append(indent).append("if (").append(node.getLabel()).append(") {\n");
                         List<Node> path = findPathToTarget(ifStruct.trueBranch, trueBranchTarget.target, ifConditions);
-                        outputPathAndBreak(path, trueBranchTarget.breakLabel, sb, indent + "    ", currentLoop, currentBlock);
+                        outputPathAndBreak(path, trueBranchTarget.breakLabel, sb, indent + "    ", currentLoop, currentBlock, trueBranchTarget.target);
                         sb.append(indent).append("}\n");
                         return;
                     }
@@ -2166,7 +2332,7 @@ public class StructureDetector {
                         falseBranchTarget != null && !falseBranchTarget.isLabeledBlockBreak) {
                         sb.append(indent).append("if (!").append(node.getLabel()).append(") {\n");
                         List<Node> falsePath = findPathToTarget(ifStruct.falseBranch, falseBranchTarget.target, ifConditions);
-                        outputPathAndBreak(falsePath, falseBranchTarget.breakLabel, sb, indent + "    ", currentLoop, currentBlock);
+                        outputPathAndBreak(falsePath, falseBranchTarget.breakLabel, sb, indent + "    ", currentLoop, currentBlock, falseBranchTarget.target);
                         sb.append(indent).append("}\n");
                         // Continue with true branch content at same indent level (flattened), without the final break
                         List<Node> truePath = findPathToTarget(ifStruct.trueBranch, trueBranchTarget.target, ifConditions);
@@ -2182,13 +2348,13 @@ public class StructureDetector {
                     if (trueBranchTarget != null) {
                         sb.append(indent).append("if (").append(node.getLabel()).append(") {\n");
                         List<Node> path = findPathToTarget(ifStruct.trueBranch, trueBranchTarget.target, ifConditions);
-                        outputPathAndBreak(path, trueBranchTarget.breakLabel, sb, indent + "    ", currentLoop, currentBlock);
+                        outputPathAndBreak(path, trueBranchTarget.breakLabel, sb, indent + "    ", currentLoop, currentBlock, trueBranchTarget.target);
                         sb.append(indent).append("}\n");
                         
                         // Continue with false branch at same indent level (flattened)
                         if (falseBranchTarget != null) {
                             List<Node> falsePath = findPathToTarget(ifStruct.falseBranch, falseBranchTarget.target, ifConditions);
-                            outputPathAndBreak(falsePath, falseBranchTarget.breakLabel, sb, indent, currentLoop, currentBlock);
+                            outputPathAndBreak(falsePath, falseBranchTarget.breakLabel, sb, indent, currentLoop, currentBlock, falseBranchTarget.target);
                         } else {
                             Set<Node> falseVisited = new HashSet<>(visited);
                             falseVisited.add(node);
@@ -2202,7 +2368,7 @@ public class StructureDetector {
                     if (falseBranchTarget != null) {
                         sb.append(indent).append("if (!").append(node.getLabel()).append(") {\n");
                         List<Node> falsePath = findPathToTarget(ifStruct.falseBranch, falseBranchTarget.target, ifConditions);
-                        outputPathAndBreak(falsePath, falseBranchTarget.breakLabel, sb, indent + "    ", currentLoop, currentBlock);
+                        outputPathAndBreak(falsePath, falseBranchTarget.breakLabel, sb, indent + "    ", currentLoop, currentBlock, falseBranchTarget.target);
                         sb.append(indent).append("}\n");
                         // Continue with true branch at same indent level (flattened)
                         Set<Node> thenVisited = new HashSet<>(visited);
@@ -2283,7 +2449,7 @@ public class StructureDetector {
                 sb.append(indent).append("if (!").append(node.getLabel()).append(") {\n");
                 if (falseBranchTarget != null) {
                     List<Node> path = findPathToTarget(ifStruct.falseBranch, falseBranchTarget.target, ifConditions);
-                    outputPathAndBreak(path, falseBranchTarget.breakLabel, sb, indent + "    ", currentLoop, currentBlock);
+                    outputPathAndBreak(path, falseBranchTarget.breakLabel, sb, indent + "    ", currentLoop, currentBlock, falseBranchTarget.target);
                 } else {
                     Set<Node> falseVisited = new HashSet<>(visited);
                     generatePseudocodeInLoop(ifStruct.falseBranch, falseVisited, sb, indent + "    ", loopHeaders, ifConditions, labeledBreakEdges, blockStarts, loopsNeedingLabels, currentLoop, currentBlock, ifStruct.mergeNode);
@@ -2313,7 +2479,7 @@ public class StructureDetector {
                     sb.append(indent).append("}\n");
                     // Output the common false branch path and break
                     List<Node> falsePath = findPathToTarget(ifStruct.falseBranch, falseBranchTarget.target, ifConditions);
-                    outputPathAndBreak(falsePath, falseBranchTarget.breakLabel, sb, indent, currentLoop, currentBlock);
+                    outputPathAndBreak(falsePath, falseBranchTarget.breakLabel, sb, indent, currentLoop, currentBlock, falseBranchTarget.target);
                     return;
                 }
                 
@@ -2324,7 +2490,7 @@ public class StructureDetector {
                 if (trueBranchTarget.isLabeledBlockBreak && falseBranchTarget != null && !falseBranchTarget.isLabeledBlockBreak) {
                     sb.append(indent).append("if (!").append(node.getLabel()).append(") {\n");
                     List<Node> falsePath = findPathToTarget(ifStruct.falseBranch, falseBranchTarget.target, ifConditions);
-                    outputPathAndBreak(falsePath, falseBranchTarget.breakLabel, sb, indent + "    ", currentLoop, currentBlock);
+                    outputPathAndBreak(falsePath, falseBranchTarget.breakLabel, sb, indent + "    ", currentLoop, currentBlock, falseBranchTarget.target);
                     sb.append(indent).append("}\n");
                     // Continue with true branch content at same indent level (flattened), without the final break
                     List<Node> truePath = findPathToTarget(ifStruct.trueBranch, trueBranchTarget.target, ifConditions);
@@ -2338,7 +2504,7 @@ public class StructureDetector {
                 
                 sb.append(indent).append("if (").append(node.getLabel()).append(") {\n");
                 List<Node> path = findPathToTarget(ifStruct.trueBranch, trueBranchTarget.target, ifConditions);
-                outputPathAndBreak(path, trueBranchTarget.breakLabel, sb, indent + "    ", currentLoop, currentBlock);
+                outputPathAndBreak(path, trueBranchTarget.breakLabel, sb, indent + "    ", currentLoop, currentBlock, trueBranchTarget.target);
                 sb.append(indent).append("}\n");
                 
                 // Continue with false branch content at same indent level (flattened)
@@ -2360,7 +2526,7 @@ public class StructureDetector {
                             sb.append(indent).append(n.getLabel()).append(";\n");
                         }
                     } else {
-                        outputPathAndBreak(falsePath, falseBranchTarget.breakLabel, sb, indent, currentLoop, currentBlock);
+                        outputPathAndBreak(falsePath, falseBranchTarget.breakLabel, sb, indent, currentLoop, currentBlock, falseBranchTarget.target);
                     }
                 } else if (currentLoop.body.contains(ifStruct.falseBranch)) {
                     Set<Node> falseVisited = new HashSet<>(visited);
@@ -2393,7 +2559,7 @@ public class StructureDetector {
                         sb.append(indent).append(n.getLabel()).append(";\n");
                     }
                 } else {
-                    outputPathAndBreak(falsePath, falseBranchTarget.breakLabel, sb, indent, currentLoop, currentBlock);
+                    outputPathAndBreak(falsePath, falseBranchTarget.breakLabel, sb, indent, currentLoop, currentBlock, falseBranchTarget.target);
                 }
                 return;
             }
@@ -2409,7 +2575,7 @@ public class StructureDetector {
             if (falseBranchTarget != null) {
                 // False branch leads to a break - output path and break statement
                 List<Node> path = findPathToTarget(ifStruct.falseBranch, falseBranchTarget.target, ifConditions);
-                outputPathAndBreak(path, falseBranchTarget.breakLabel, sb, indent + "    ", currentLoop, currentBlock);
+                outputPathAndBreak(path, falseBranchTarget.breakLabel, sb, indent + "    ", currentLoop, currentBlock, falseBranchTarget.target);
             } else {
                 Set<Node> falseVisited = new HashSet<>(visited);
                 generatePseudocodeInLoop(ifStruct.falseBranch, falseVisited, sb, indent + "    ", loopHeaders, ifConditions, labeledBreakEdges, blockStarts, loopsNeedingLabels, currentLoop, currentBlock, ifStruct.mergeNode);
@@ -2588,7 +2754,7 @@ public class StructureDetector {
      * Outputs intermediate nodes and then a break statement.
      */
     private void outputPathAndBreak(List<Node> path, String breakLabel, StringBuilder sb, String indent) {
-        outputPathAndBreak(path, breakLabel, sb, indent, null, null);
+        outputPathAndBreak(path, breakLabel, sb, indent, null, null, null);
     }
     
     /**
@@ -2600,9 +2766,50 @@ public class StructureDetector {
      */
     private void outputPathAndBreak(List<Node> path, String breakLabel, StringBuilder sb, String indent,
                                      LoopStructure currentLoop, LabeledBlockStructure currentBlock) {
+        outputPathAndBreak(path, breakLabel, sb, indent, currentLoop, currentBlock, null);
+    }
+    
+    /**
+     * Outputs intermediate nodes, optionally a return node, and then a break statement.
+     * When inside a labeled block and break label is empty, uses the loop header label.
+     * This is necessary because an unlabeled 'break;' inside a labeled block would exit
+     * the labeled block, not the enclosing loop. To exit the loop from inside a labeled
+     * block, we must explicitly specify the loop header as the break target.
+     * 
+     * @param path the intermediate nodes to output
+     * @param breakLabel the break label to use
+     * @param sb the StringBuilder to output to
+     * @param indent the indentation
+     * @param currentLoop the current loop (for label generation)
+     * @param currentBlock the current labeled block (for label generation)
+     * @param target the target node - if it has no successors, it will be output before the break
+     */
+    private void outputPathAndBreak(List<Node> path, String breakLabel, StringBuilder sb, String indent,
+                                     LoopStructure currentLoop, LabeledBlockStructure currentBlock, Node target) {
         for (Node n : path) {
             sb.append(indent).append(n.getLabel()).append(";\n");
         }
+        
+        // If the target is a return node (no successors), output it before the break
+        if (target != null && target.succs.isEmpty()) {
+            // Check if this target is a return node (not the normal exit)
+            boolean isReturnNode = false;
+            for (LabeledBlockStructure block : labeledBlocks) {
+                if (block.label.equals("r_block")) {
+                    for (LabeledBreakEdge breakEdge : block.breaks) {
+                        if (breakEdge.from.equals(target)) {
+                            isReturnNode = true;
+                            break;
+                        }
+                    }
+                    break;
+                }
+            }
+            if (isReturnNode) {
+                sb.append(indent).append(target.getLabel()).append(";\n");
+            }
+        }
+        
         if (breakLabel != null && !breakLabel.isEmpty()) {
             sb.append(indent).append("break ").append(breakLabel).append(";\n");
         } else if (currentBlock != null && currentLoop != null) {
@@ -2715,6 +2922,21 @@ public class StructureDetector {
             // If this node has no successors (end node like 'exit'), it's the target
             if (current.succs.isEmpty()) {
                 if (foundOutsideLoop) {
+                    // Check if this is a "return" node that should target the return block
+                    // (i.e., a node with no successors that is NOT the normal loop exit target)
+                    for (LabeledBlockStructure block : labeledBlocks) {
+                        if (block.label.equals("r_block")) {
+                            // Check if this node is a return node (has a break edge in the return block)
+                            for (LabeledBreakEdge breakEdge : block.breaks) {
+                                if (breakEdge.from.equals(current)) {
+                                    // This is a return node - use the return block label
+                                    return new BranchTargetResult(current, block.label, true);
+                                }
+                            }
+                            break;
+                        }
+                    }
+                    // Normal break target
                     String breakLabel = findBreakLabel(current, loopHeaders, currentLoop);
                     return new BranchTargetResult(current, breakLabel, false);
                 }
@@ -3328,39 +3550,59 @@ public class StructureDetector {
         System.out.println("--- Graphviz/DOT ---");
         System.out.println(detector6.toGraphviz());
         
-        // Example 7: Complex nested loops with labeled breaks and continues
-        // Represents the following code:
+        // Example 7: Complex nested loops with labeled breaks and returns
+        // This example includes nodes (r1, r2) with no successors that represent "return" statements.
+        // Since r1 and r2 have no successors, a labeled block at the top level is needed
+        // to properly break out of the entire structure.
         //
-        // loop_a: for (var c = 0; c < 8; c = c + 1) {
-        //   loop_b: for (var d = 0; d < 25; d++) {
-        //     for (var e = 0; e < 50; e++) {
-        //       if (e == 9) { trace("X"); break loop_b; }
-        //       if (e == 20) { trace("Y"); continue loop_a; }
-        //       if (e == 8) { trace("Z"); break; }
-        //       trace("BA"); break loop_a;
-        //     }
+        // Expected pseudocode:
+        // entry;
+        // r_block: {
+        // loop_a_cond_loop: while(true) {
+        //   if (!loop_a_cond) {
+        //     break;
         //   }
-        //   trace("hello");
-        // }
-        //
-        // Modeled with labeled blocks for continue semantics:
-        // while (loop_a_cond) {
-        //   loop_a_cont: {
-        //     while (loop_b_cond) {
-        //       loop_b_cont: {
-        //         while (inner_cond) {
-        //           if (e == 9) { trace_X; break loop_b; }
-        //           if (e == 20) { trace_Y; break loop_a_cont; } // continue loop_a -> my_cont
-        //           if (e == 8) { trace_Z; break loop_b_cont; }  // break inner -> inc_d
-        //           trace_BA; break loop_a;
-        //           inc_e;
-        //         }
-        //       }
-        //       inc_d;
+        //   loop_b_cond_block {
+        //     loop_b_cond_loop: while(true) {
+        //          inner_cond_block {
+        //             if(inner_cond) {
+        //                 break inner_cond_block;                
+        //             }
+        //             if (check_e9) {
+        //                 trace_X;   
+        //                 break loop_b_cond_loop;             
+        //             }   
+        //             if (!ifr) {
+        //                 r1;
+        //                 break r_block;
+        //             }
+        //             if (check_e20) {
+        //                 trace_Y;
+        //                 break loop_b_cond_block;
+        //             }     
+        //             if (!ifr2) {
+        //                 r2;
+        //                 break r_block;
+        //             }    
+        //             if (check_e8) {
+        //                 trace_BA;
+        //                 break loop_a_cond_loop;
+        //             }
+        //             trace_Z;
+        //          }
+        //          inc_d;
         //     }
         //     trace_hello;
         //   }
-        //   my_cont -> ternar -> (pre_inc_a | pre_inc_b) -> inc_c;
+        //   my_cont;
+        //   if (ternar) {
+        //     pre_inc_a;
+        //   } else {
+        //     pre_inc_b;
+        //   }
+        //   inc_c;
+        // }
+        // exit;
         // }
         System.out.println("\n===== Example 7: Complex Nested Loops with Labeled Breaks =====");
         StructureDetector detector7 = StructureDetector.fromGraphviz(
@@ -3375,26 +3617,27 @@ public class StructureDetector {
             // inner: anonymous innermost for loop condition
             "  inner_cond->check_e9;\n" +              // e < 50 -> enter body
             "  inner_cond->inc_d;\n" +                 // e >= 50 -> d++ (exit inner normally)
+            "  trace_hello->my_cont;\n" +              // trace_hello -> my_cont
             // if (e == 9) { trace("X"); break loop_b; }
             "  check_e9->trace_X;\n" +                 // true -> trace_X
-            "  check_e9->check_e20;\n" +               // false -> continue to check_e20
+            "  check_e9->ifr;\n" +                     // false -> check ifr
+            "  ifr->check_e20;\n" +                    // ifr true -> continue to check_e20
+            "  ifr->r1;\n" +                           // ifr false -> r1 (return/no successor)
             "  trace_X->trace_hello;\n" +              // trace_X -> break loop_b (skip d++)
             // if (e == 20) { trace("Y"); continue loop_a; }
             "  check_e20->trace_Y;\n" +                // true -> trace_Y
-            "  check_e20->check_e8;\n" +               // false -> continue to check_e8
+            "  check_e20->ifr2;\n" +                   // false -> check ifr2
+            "  ifr2->check_e8;\n" +                    // ifr2 true -> continue to check_e8
+            "  ifr2->r2;\n" +                          // ifr2 false -> r2 (return/no successor)
             "  trace_Y->my_cont;\n" +                  // trace_Y -> continue loop_a (to my_cont)
-            // if (e == 8) { trace("Z"); break; }
+            // if (e == 8) { trace("Z"); break; } else { trace("BA"); break loop_a; }
             "  check_e8->trace_Z;\n" +                 // true -> trace_Z
             "  check_e8->trace_BA;\n" +                // false -> trace_BA
             "  trace_Z->inc_d;\n" +                    // trace_Z -> break inner (d++)
             // trace("BA"); break loop_a;
             "  trace_BA->exit;\n" +                    // trace_BA -> break loop_a (exit)
-            // inner loop: normal body end goes to e++
-            "  inc_e->inner_cond;\n" +                 // e++ -> back to inner condition
             // loop_b: d++ after inner loop exits normally
             "  inc_d->loop_b_cond;\n" +                // d++ -> back to loop_b condition
-            // trace("hello") at end of loop_a body -> my_cont (after loop_a_cont block)
-            "  trace_hello->my_cont;\n" +              // trace_hello -> my_cont
             // my_cont section (after loop_a_cont block)
             "  my_cont->ternar;\n" +                   // my_cont -> ternar
             "  ternar->pre_inc_a;\n" +                 // ternar true -> pre_inc_a
@@ -3408,6 +3651,8 @@ public class StructureDetector {
         
         // Labeled blocks for continue semantics are now auto-detected!
         // No need to manually call addLabeledBlock() anymore.
+        // The nodes r1 and r2 have no successors, which should trigger
+        // creation of a top-level labeled block for breaking out of the structure.
         
         detector7.analyze();
         System.out.println("\n--- Pseudocode ---");
