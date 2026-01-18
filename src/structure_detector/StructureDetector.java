@@ -3650,10 +3650,6 @@ public class StructureDetector {
             "  case3->end;\n" +
             "  case4->end;\n" +
             "  d->end;\n" +
-            "  case1->case2;\n" +
-            "  case2->case3;\n" +
-            "  case3->case4;\n" +
-            "  case4->d;\n" +
             "}",
             true
         );
