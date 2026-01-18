@@ -3653,5 +3653,29 @@ public class StructureDetector {
             "}",
             true
         );
+
+        // Example 12: Switch with fall-through and merged cases
+        System.out.println();
+        runExample("Example 12: Switch with Fall-through and Merged Cases",
+            "digraph {\n" +
+            "  start->if1;\n" +
+            "  if1->case1;\n" +
+            "  if2->case2;\n" +
+            "  if3->case3;\n" +
+            "  if4->case45;\n" +
+            "  if5->case45;\n" +
+            "  if1->if2;\n" +
+            "  if2->if3;\n" +
+            "  if3->if4;\n" +
+            "  if4->if5;\n" +
+            "  if5->d;\n" +
+            "  case1->end;\n" +
+            "  case3->end;\n" +
+            "  case45->end;\n" +
+            "  d->end;\n" +
+            "  case2->case3;\n" +
+            "}",
+            true
+        );
     }
 }
