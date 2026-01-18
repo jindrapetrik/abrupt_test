@@ -2645,32 +2645,41 @@ public class StructureDetector {
         visited.add(node);
         
         // Check if this node starts a nested try block (check before if structure)
-        TryStructure nestedTry = findTryStructureStartingAt(node);
-        if (nestedTry != null) {
+        GroupedTryStructure groupedTry = findGroupedTryStructureStartingAt(node);
+        if (groupedTry != null) {
+            // Use the first handler's try body for generating statements
+            TryStructure firstTry = groupedTry.catchHandlers.get(0);
+            
             // Generate try body statements using the helper method
             Set<Node> tryVisited = new HashSet<>();
-            List<Statement> tryBodyStmts = generateTryBodyStatements(node, nestedTry, tryVisited,
+            List<Statement> tryBodyStmts = generateTryBodyStatements(node, firstTry, tryVisited,
                                         loopHeaders, ifConditions, blockStarts, labeledBreakEdges, 
                                         loopsNeedingLabels, currentLoop, currentBlock, switchStarts);
             
-            // Find the first catch node
-            Node catchStart = findCatchStartNode(nestedTry);
-            Set<Node> catchVisited = new HashSet<>();
-            List<Statement> catchBody = new ArrayList<>();
-            if (catchStart != null) {
-                catchBody = generateStatementsForNodeSet(catchStart, nestedTry.catchBody, catchVisited,
-                                            loopHeaders, ifConditions, blockStarts, labeledBreakEdges,
-                                            loopsNeedingLabels, currentLoop, currentBlock, switchStarts);
+            // Generate catch blocks for each handler
+            List<TryStatement.CatchBlock> catchBlocks = new ArrayList<>();
+            for (TryStructure handler : groupedTry.catchHandlers) {
+                Node catchStart = findCatchStartNode(handler);
+                Set<Node> catchVisited = new HashSet<>();
+                List<Statement> catchBody = new ArrayList<>();
+                if (catchStart != null) {
+                    catchBody = generateStatementsForNodeSet(catchStart, handler.catchBody, catchVisited,
+                                                loopHeaders, ifConditions, blockStarts, labeledBreakEdges,
+                                                loopsNeedingLabels, currentLoop, currentBlock, switchStarts);
+                }
+                catchBlocks.add(new TryStatement.CatchBlock(handler.exceptionIndex, catchBody));
+                
+                // Mark catch nodes as visited
+                visited.addAll(handler.catchBody);
             }
             
-            result.add(new TryStatement(tryBodyStmts, catchBody));
+            result.add(TryStatement.withMultipleCatch(tryBodyStmts, catchBlocks));
             
-            // Mark all try and catch nodes as visited in the main visited set
-            visited.addAll(nestedTry.tryBody);
-            visited.addAll(nestedTry.catchBody);
+            // Mark all try nodes as visited in the main visited set
+            visited.addAll(groupedTry.tryBody);
             
             // Find the merge node and continue
-            Node tryCatchMerge = findTryCatchMergeNode(nestedTry);
+            Node tryCatchMerge = findTryCatchMergeNode(firstTry);
             if (tryCatchMerge != null && nodeSet.contains(tryCatchMerge) && !visited.contains(tryCatchMerge)) {
                 result.addAll(generateStatementsForNodeSet(tryCatchMerge, nodeSet, visited,
                                loopHeaders, ifConditions, blockStarts, labeledBreakEdges,
@@ -2876,32 +2885,41 @@ public class StructureDetector {
         }
         
         // Check if this node is the start of a try block
-        TryStructure tryStruct = findTryStructureStartingAt(node);
-        if (tryStruct != null) {
+        GroupedTryStructure groupedTry = findGroupedTryStructureStartingAt(node);
+        if (groupedTry != null) {
+            // Use the first handler's try body for generating statements
+            TryStructure firstTry = groupedTry.catchHandlers.get(0);
+            
             // Generate try body statements using the helper method
             Set<Node> tryVisited = new HashSet<>();
-            List<Statement> tryBodyStmts = generateTryBodyStatements(node, tryStruct, tryVisited,
+            List<Statement> tryBodyStmts = generateTryBodyStatements(node, firstTry, tryVisited,
                                         loopHeaders, ifConditions, blockStarts, labeledBreakEdges, 
                                         loopsNeedingLabels, currentLoop, currentBlock, switchStarts);
             
-            // Find the first catch node (one without predecessors in try body)
-            Node catchStart = findCatchStartNode(tryStruct);
-            Set<Node> catchVisited = new HashSet<>();
-            List<Statement> catchBody = new ArrayList<>();
-            if (catchStart != null) {
-                catchBody = generateStatementsForNodeSet(catchStart, tryStruct.catchBody, catchVisited,
-                                            loopHeaders, ifConditions, blockStarts, labeledBreakEdges,
-                                            loopsNeedingLabels, currentLoop, currentBlock, switchStarts);
+            // Generate catch blocks for each handler
+            List<TryStatement.CatchBlock> catchBlocks = new ArrayList<>();
+            for (TryStructure handler : groupedTry.catchHandlers) {
+                Node catchStart = findCatchStartNode(handler);
+                Set<Node> catchVisited = new HashSet<>();
+                List<Statement> catchBody = new ArrayList<>();
+                if (catchStart != null) {
+                    catchBody = generateStatementsForNodeSet(catchStart, handler.catchBody, catchVisited,
+                                                loopHeaders, ifConditions, blockStarts, labeledBreakEdges,
+                                                loopsNeedingLabels, currentLoop, currentBlock, switchStarts);
+                }
+                catchBlocks.add(new TryStatement.CatchBlock(handler.exceptionIndex, catchBody));
+                
+                // Mark catch nodes as visited
+                visited.addAll(handler.catchBody);
             }
             
-            result.add(new TryStatement(tryBodyStmts, catchBody));
+            result.add(TryStatement.withMultipleCatch(tryBodyStmts, catchBlocks));
             
-            // Mark all try and catch nodes as visited
-            visited.addAll(tryStruct.tryBody);
-            visited.addAll(tryStruct.catchBody);
+            // Mark all try nodes as visited
+            visited.addAll(groupedTry.tryBody);
             
             // Find the merge node (common successor of try and catch blocks)
-            Node tryCatchMerge = findTryCatchMergeNode(tryStruct);
+            Node tryCatchMerge = findTryCatchMergeNode(firstTry);
             if (tryCatchMerge != null && !visited.contains(tryCatchMerge)) {
                 result.addAll(generateStatements(tryCatchMerge, visited, loopHeaders, ifConditions, 
                     blockStarts, labeledBreakEdges, loopsNeedingLabels, currentLoop, currentBlock, stopAt, switchStarts));
@@ -4634,6 +4652,27 @@ public class StructureDetector {
             "}",
             "before_try2, trybody1, a, b, trybody2, catchbody1, c, d, catchbody2, after_try2 => catchbody3; " +
             "trybody1, a, b, trybody2 => catchbody1, c, d, catchbody2"
+        );
+
+        // Example 16: Multiple Catch Blocks (same try body, multiple handlers)
+        System.out.println();
+        runExampleWithExceptions("Example 16: Multiple Catch Blocks",
+            "digraph {\n" +
+            "  start->trybody1;\n" +
+            "  trybody1->a;\n" +
+            "  trybody1->b;\n" +
+            "  a->trybody2;\n" +
+            "  b->trybody2;\n" +
+            "  trybody2->end;\n" +
+            "  catchbody1->c;\n" +
+            "  catchbody1->d;\n" +
+            "  c->catchbody2;\n" +
+            "  d->catchbody2;\n" +
+            "  catchbody2->end;\n" +
+            "  catchbody3->end;\n" +
+            "}",
+            "trybody1, a, b, trybody2 => catchbody1, c, d, catchbody2; " +
+            "trybody1, a, b, trybody2 => catchbody3"
         );
     }
 }

@@ -58,14 +58,22 @@ public class TryStatement extends Statement {
     }
     
     /**
+     * Private constructor for multiple catch blocks (used by factory method).
+     */
+    private TryStatement(List<Statement> tryBody, List<CatchBlock> catchBlocks, boolean marker) {
+        this.tryBody = tryBody != null ? new ArrayList<>(tryBody) : new ArrayList<>();
+        this.catchBlocks = catchBlocks != null ? new ArrayList<>(catchBlocks) : new ArrayList<>();
+    }
+    
+    /**
      * Creates a new try-catch statement with multiple catch blocks.
      * 
      * @param tryBody the statements in the try block
      * @param catchBlocks the list of catch blocks
+     * @return a new TryStatement with multiple catch blocks
      */
-    public TryStatement(List<Statement> tryBody, List<CatchBlock> catchBlocks) {
-        this.tryBody = tryBody != null ? new ArrayList<>(tryBody) : new ArrayList<>();
-        this.catchBlocks = catchBlocks != null ? new ArrayList<>(catchBlocks) : new ArrayList<>();
+    public static TryStatement withMultipleCatch(List<Statement> tryBody, List<CatchBlock> catchBlocks) {
+        return new TryStatement(tryBody, catchBlocks, true);
     }
     
     /**
