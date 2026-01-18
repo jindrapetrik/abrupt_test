@@ -3212,8 +3212,8 @@ public class StructureDetector {
      * Detects switch structures in the CFG.
      * 
      * A switch structure is detected when there's a chain of conditional nodes where:
-     * - Each condition's TRUE branch goes to the next condition (fall-through to next check)
-     * - Each condition's FALSE branch goes to a case body
+     * - Each condition's TRUE branch (first edge) goes to a case body
+     * - Each condition's FALSE branch (second edge) goes to the next condition
      * - All case bodies eventually lead to the same merge node
      * - Cases may have fall-through edges to the next case
      * 
@@ -3248,10 +3248,10 @@ public class StructureDetector {
                 continue;
             }
             
-            // Check if this node's TRUE branch leads to another condition (switch pattern)
-            // In a switch pattern: true branch -> next condition, false branch -> case body
-            if (!conditionNodes.contains(ifStruct.trueBranch)) {
-                continue; // Not a switch pattern - true branch should be another condition
+            // Check if this node's FALSE branch leads to another condition (switch pattern)
+            // In a switch pattern: true branch -> case body, false branch -> next condition
+            if (!conditionNodes.contains(ifStruct.falseBranch)) {
+                continue; // Not a switch pattern - false branch should be another condition
             }
             
             // Try to build a switch chain starting from this condition
@@ -3270,16 +3270,16 @@ public class StructureDetector {
                 Node trueBranch = currentIf.trueBranch;
                 Node falseBranch = currentIf.falseBranch;
                 
-                // In switch pattern: false branch is the case body
-                Node caseBody = falseBranch;
+                // In switch pattern: true branch is the case body
+                Node caseBody = trueBranch;
                 cases.add(new SwitchCase(currentCond, caseBody, false));
                 
-                // Check if true branch is another condition (chain continues)
-                if (conditionNodes.contains(trueBranch)) {
-                    currentCond = trueBranch;
+                // Check if false branch is another condition (chain continues)
+                if (conditionNodes.contains(falseBranch)) {
+                    currentCond = falseBranch;
                 } else {
-                    // True branch is the default case (last in the chain)
-                    cases.add(new SwitchCase(null, trueBranch, true));
+                    // False branch is the default case (last in the chain)
+                    cases.add(new SwitchCase(null, falseBranch, true));
                     
                     // Find the merge node - should be reachable from all case bodies
                     Set<Node> allCaseBodies = new HashSet<>();
@@ -3633,14 +3633,14 @@ public class StructureDetector {
         runExample("Example 11: Switch-like Chain of Conditions",
             "digraph {\n" +
             "  start->if1;\n" +
-            "  if1->if2;\n" +
-            "  if2->if3;\n" +
-            "  if3->if4;\n" +
-            "  if4->d;\n" +
             "  if1->case1;\n" +
             "  if2->case2;\n" +
             "  if3->case3;\n" +
             "  if4->case4;\n" +
+            "  if1->if2;\n" +
+            "  if2->if3;\n" +
+            "  if3->if4;\n" +
+            "  if4->d;\n" +
             "  case1->end;\n" +
             "  case2->end;\n" +
             "  case3->end;\n" +
