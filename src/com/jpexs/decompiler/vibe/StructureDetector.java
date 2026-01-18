@@ -87,7 +87,8 @@ public class StructureDetector {
     
     /**
      * Gets or assigns a switch label for a given switch start node.
-     * Uses global counter for sequential naming with loop prefix (loop_0, loop_1, etc.).
+     * Uses the same labeling system as loops (loop_0, loop_1, etc.) since switches
+     * can be targets of break statements similar to loops.
      */
     private String getSwitchLabel(Node switchStart) {
         return loopLabels.computeIfAbsent(switchStart, k -> "loop_" + globalLabelCounter++);
