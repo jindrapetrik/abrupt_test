@@ -609,6 +609,7 @@ public class StructureDetector {
     /**
      * Finds the path from start to target, stopping at conditionals.
      * Returns nodes between start (inclusive) and target (exclusive).
+     * Returns empty list if target is not reachable without going through conditionals that don't lead to target.
      */
     private List<Node> findPathToNode(Node start, Node target, Map<Node, IfStructure> ifConditions, LoopStructure loop) {
         List<Node> path = new ArrayList<>();
@@ -618,25 +619,26 @@ public class StructureDetector {
         while (current != null && !current.equals(target) && !visited.contains(current)) {
             visited.add(current);
             
-            // If this is a conditional, recurse into both branches looking for target
+            // If this is a conditional, check if target is reachable from either branch
             if (ifConditions.containsKey(current)) {
                 IfStructure ifStruct = ifConditions.get(current);
-                // Process the nested if structure
-                path.add(current);
                 
                 // Check if target is reachable from true branch
                 if (isReachableWithinLoop(ifStruct.trueBranch, target, loop)) {
+                    // Don't add the conditional node to path, recurse into true branch
                     List<Node> truePath = findPathToNode(ifStruct.trueBranch, target, ifConditions, loop);
                     path.addAll(truePath);
                     return path;
                 }
                 // Check if target is reachable from false branch
                 if (isReachableWithinLoop(ifStruct.falseBranch, target, loop)) {
+                    // Don't add the conditional node to path, recurse into false branch
                     List<Node> falsePath = findPathToNode(ifStruct.falseBranch, target, ifConditions, loop);
                     path.addAll(falsePath);
                     return path;
                 }
-                break;
+                // Target not reachable from either branch, return empty path
+                return new ArrayList<>();
             }
             
             path.add(current);
@@ -2140,6 +2142,9 @@ public class StructureDetector {
     /**
      * Outputs intermediate nodes and then a break statement.
      * When inside a labeled block and break label is empty, uses the loop header label.
+     * This is necessary because an unlabeled 'break;' inside a labeled block would exit
+     * the labeled block, not the enclosing loop. To exit the loop from inside a labeled
+     * block, we must explicitly specify the loop header as the break target.
      */
     private void outputPathAndBreak(List<Node> path, String breakLabel, StringBuilder sb, String indent,
                                      LoopStructure currentLoop, LabeledBlockStructure currentBlock) {
@@ -2149,7 +2154,8 @@ public class StructureDetector {
         if (breakLabel != null && !breakLabel.isEmpty()) {
             sb.append(indent).append("break ").append(breakLabel).append(";\n");
         } else if (currentBlock != null && currentLoop != null) {
-            // Inside a labeled block, need explicit loop label for break
+            // Inside a labeled block, need explicit loop label for break to exit the loop
+            // (unlabeled break would exit the labeled block instead)
             sb.append(indent).append("break ").append(currentLoop.header.getLabel()).append(";\n");
         } else {
             sb.append(indent).append("break;\n");
