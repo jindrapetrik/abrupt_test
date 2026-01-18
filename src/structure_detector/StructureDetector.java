@@ -300,6 +300,14 @@ public class StructureDetector {
     }
     
     /**
+     * Gets or assigns a switch label for a given switch start node.
+     * Uses global counter for sequential naming with loop prefix (loop0, loop1, etc.).
+     */
+    private String getSwitchLabel(Node switchStart) {
+        return loopLabels.computeIfAbsent(switchStart, k -> "loop" + globalLabelCounter++);
+    }
+    
+    /**
      * Gets the mapped block label, converting old-style (node_block) to new-style (block0).
      * If no mapping exists, creates a new one with the global counter.
      */
@@ -3230,6 +3238,15 @@ public class StructureDetector {
         // Check if this is a switch start node
         SwitchStructure switchStruct = switchStarts != null ? switchStarts.get(node) : null;
         if (switchStruct != null) {
+            // Check if there's a labeled block around this switch (for labeled breaks from within case bodies)
+            LabeledBlockStructure switchBlock = blockStarts.get(node);
+            String switchLabel = null;
+            if (switchBlock != null && !switchBlock.breaks.isEmpty() && switchBlock.endNode.equals(switchStruct.mergeNode)) {
+                // This switch needs a label for breaks from within case bodies
+                // Use the switch label (with loop prefix) instead of block label
+                switchLabel = getSwitchLabel(node);
+            }
+            
             // Generate switch statement
             List<SwitchStatement.Case> switchCases = new ArrayList<>();
             
@@ -3259,6 +3276,12 @@ public class StructureDetector {
                     // Stop at the merge node or the next case body (for fall-through)
                     Node stopNode = sc.hasBreak ? switchStruct.mergeNode : caseBodyToNextBody.get(sc.caseBody);
                     List<Statement> bodyStatements = generateStatements(sc.caseBody, caseVisited, loopHeaders, ifConditions, blockStarts, labeledBreakEdges, loopsNeedingLabels, currentLoop, currentBlock, stopNode, switchStarts);
+                    
+                    // If we have a switch label, replace block breaks with switch breaks
+                    if (switchLabel != null && switchBlock != null) {
+                        bodyStatements = replaceBlockBreaksWithSwitchBreaks(bodyStatements, switchBlock.label, switchLabel);
+                    }
+                    
                     caseBody.addAll(bodyStatements);
                 }
                 
@@ -3274,13 +3297,18 @@ public class StructureDetector {
                 }
             }
             
-            result.add(new SwitchStatement(switchCases));
+            result.add(new SwitchStatement(switchCases, switchLabel));
             
             // Mark all switch condition nodes as visited (case bodies are handled by recursive generation)
             for (SwitchCase sc : switchStruct.cases) {
                 if (sc.conditionNode != null) {
                     visited.add(sc.conditionNode);
                 }
+            }
+            
+            // Mark the switch block as consumed so it won't be rendered separately
+            if (switchBlock != null && switchLabel != null) {
+                visited.add(node); // Prevent labeled block from being rendered
             }
             
             // Continue after the switch (at the merge node)
@@ -4092,6 +4120,61 @@ public class StructureDetector {
         
         return result;
     }
+    
+    /**
+     * Replaces break statements with oldLabel to use newLabel.
+     * This is used when converting labeled block breaks to switch label breaks.
+     */
+    private List<Statement> replaceBlockBreaksWithSwitchBreaks(List<Statement> statements, String oldLabel, String newLabel) {
+        List<Statement> result = new ArrayList<>();
+        for (Statement stmt : statements) {
+            if (stmt instanceof BreakStatement) {
+                BreakStatement breakStmt = (BreakStatement) stmt;
+                if (breakStmt.getLabel() != null && breakStmt.getLabel().equals(oldLabel)) {
+                    result.add(new BreakStatement(newLabel));
+                } else {
+                    result.add(stmt);
+                }
+            } else if (stmt instanceof IfStatement) {
+                IfStatement ifStmt = (IfStatement) stmt;
+                List<Statement> newOnTrue = replaceBlockBreaksWithSwitchBreaks(ifStmt.getOnTrue(), oldLabel, newLabel);
+                List<Statement> newOnFalse = replaceBlockBreaksWithSwitchBreaks(ifStmt.getOnFalse(), oldLabel, newLabel);
+                result.add(new IfStatement(ifStmt.getCondition(), ifStmt.isNegated(), newOnTrue, newOnFalse));
+            } else if (stmt instanceof LoopStatement) {
+                LoopStatement loopStmt = (LoopStatement) stmt;
+                List<Statement> newBody = replaceBlockBreaksWithSwitchBreaks(loopStmt.getBody(), oldLabel, newLabel);
+                result.add(new LoopStatement(loopStmt.getLabel(), newBody));
+            } else if (stmt instanceof BlockStatement) {
+                BlockStatement blockStmt = (BlockStatement) stmt;
+                List<Statement> newBody = replaceBlockBreaksWithSwitchBreaks(blockStmt.getBody(), oldLabel, newLabel);
+                result.add(new BlockStatement(blockStmt.getLabel(), newBody));
+            } else if (stmt instanceof TryStatement) {
+                TryStatement tryStmt = (TryStatement) stmt;
+                List<Statement> newTryBody = replaceBlockBreaksWithSwitchBreaks(tryStmt.getTryBody(), oldLabel, newLabel);
+                List<TryStatement.CatchBlock> newCatches = new ArrayList<>();
+                for (TryStatement.CatchBlock catchBlock : tryStmt.getCatchBlocks()) {
+                    List<Statement> newCatchBody = replaceBlockBreaksWithSwitchBreaks(catchBlock.getBody(), oldLabel, newLabel);
+                    newCatches.add(new TryStatement.CatchBlock(catchBlock.getExceptionIndex(), newCatchBody));
+                }
+                result.add(TryStatement.withMultipleCatch(newTryBody, newCatches));
+            } else if (stmt instanceof SwitchStatement) {
+                SwitchStatement switchStmt = (SwitchStatement) stmt;
+                List<SwitchStatement.Case> newCases = new ArrayList<>();
+                for (SwitchStatement.Case caseStmt : switchStmt.getCases()) {
+                    List<Statement> newCaseBody = replaceBlockBreaksWithSwitchBreaks(caseStmt.getBody(), oldLabel, newLabel);
+                    if (caseStmt.isDefault()) {
+                        newCases.add(new SwitchStatement.Case(newCaseBody));
+                    } else {
+                        newCases.add(new SwitchStatement.Case(caseStmt.getCondition(), newCaseBody));
+                    }
+                }
+                result.add(new SwitchStatement(newCases, switchStmt.getLabel()));
+            } else {
+                result.add(stmt);
+            }
+        }
+        return result;
+    }
 
     private List<Statement> outputPathAndBreakStatements(List<Node> path, String breakLabel,
                                                          LoopStructure currentLoop, LabeledBlockStructure currentBlock, Node target) {
@@ -4383,6 +4466,11 @@ public class StructureDetector {
             Node defaultBody = null;
             
             while (currentCond != null && !processedNodes.contains(currentCond)) {
+                // Prevent cycles - check if we've already added this condition in this chain
+                if (conditionChain.contains(currentCond)) {
+                    break;
+                }
+                
                 IfStructure currentIf = ifMap.get(currentCond);
                 
                 if (currentIf == null || currentIf.trueBranch == null || currentIf.falseBranch == null) {
@@ -4441,6 +4529,11 @@ public class StructureDetector {
                     for (Node succ : current.succs) {
                         // Skip condition nodes and other case bodies
                         if (conditionChain.contains(succ) || allCaseBodies.contains(succ)) {
+                            continue;
+                        }
+                        
+                        // Skip already visited nodes to avoid infinite loops
+                        if (visited.contains(succ)) {
                             continue;
                         }
                         
@@ -5041,6 +5134,33 @@ public class StructureDetector {
             "}",
             "a => c1, d, H, k; " +
             "a => c2"
+        );
+
+        // Example 18: Switch with labeled break from inner while loop
+        System.out.println();
+        runExample("Example 18: Switch with Labeled Break from Inner While Loop",
+            "digraph {\n" +
+            "  start->if1;\n" +
+            "  if1->case1;\n" +
+            "  if2->case2;\n" +
+            "  if3->case3;\n" +
+            "  if4->case4;\n" +
+            "  if1->if2;\n" +
+            "  if2->if3;\n" +
+            "  if3->if4;\n" +
+            "  if4->d;\n" +
+            "  case1->end;\n" +
+            "  case2->h;\n" +
+            "  h->i;\n" +
+            "  h->g;\n" +
+            "  g->end;\n" +
+            "  g->h;\n" +
+            "  i->end;\n" +
+            "  case3->end;\n" +
+            "  case4->end;\n" +
+            "  d->end;\n" +
+            "}",
+            true
         );
     }
 }
