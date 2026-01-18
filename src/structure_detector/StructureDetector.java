@@ -2336,7 +2336,17 @@ public class StructureDetector {
                     }
                 } else if (falseBranchTarget != null) {
                     List<Node> falsePath = findPathToTarget(ifStruct.falseBranch, falseBranchTarget.target, ifConditions);
-                    outputPathAndBreak(falsePath, falseBranchTarget.breakLabel, sb, indent, currentLoop, currentBlock);
+                    // If false branch leads to labeled block end at the top level (flattened),
+                    // don't output a break - it's the natural end of the block
+                    if (falseBranchTarget.isLabeledBlockBreak && currentBlock != null && 
+                        falseBranchTarget.target.equals(currentBlock.endNode)) {
+                        // Just output the path, no break needed - natural fall-through
+                        for (Node n : falsePath) {
+                            sb.append(indent).append(n.getLabel()).append(";\n");
+                        }
+                    } else {
+                        outputPathAndBreak(falsePath, falseBranchTarget.breakLabel, sb, indent, currentLoop, currentBlock);
+                    }
                 } else if (currentLoop.body.contains(ifStruct.falseBranch)) {
                     Set<Node> falseVisited = new HashSet<>(visited);
                     generatePseudocodeInLoop(ifStruct.falseBranch, falseVisited, sb, indent, loopHeaders, ifConditions, labeledBreakEdges, blockStarts, loopsNeedingLabels, currentLoop, currentBlock, ifStruct.mergeNode);
@@ -2359,9 +2369,17 @@ public class StructureDetector {
                 Set<Node> trueVisited = new HashSet<>(visited);
                 generatePseudocodeInLoop(ifStruct.trueBranch, trueVisited, sb, indent + "    ", loopHeaders, ifConditions, labeledBreakEdges, blockStarts, loopsNeedingLabels, currentLoop, currentBlock, ifStruct.falseBranch);
                 sb.append(indent).append("}\n");
-                // Output the common false branch path and break
+                // Output the common false branch path
+                // If it leads to labeled block end, don't add break - natural fall-through
                 List<Node> falsePath = findPathToTarget(ifStruct.falseBranch, falseBranchTarget.target, ifConditions);
-                outputPathAndBreak(falsePath, falseBranchTarget.breakLabel, sb, indent, currentLoop, currentBlock);
+                if (falseBranchTarget.isLabeledBlockBreak && currentBlock != null && 
+                    falseBranchTarget.target.equals(currentBlock.endNode)) {
+                    for (Node n : falsePath) {
+                        sb.append(indent).append(n.getLabel()).append(";\n");
+                    }
+                } else {
+                    outputPathAndBreak(falsePath, falseBranchTarget.breakLabel, sb, indent, currentLoop, currentBlock);
+                }
                 return;
             }
             
