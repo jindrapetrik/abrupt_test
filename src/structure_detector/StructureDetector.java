@@ -926,8 +926,9 @@ public class StructureDetector {
     private void detectSkipBlocksInLoops(List<LoopStructure> loops, Map<Node, LoopStructure> mainLoops) {
         List<IfStructure> ifs = detectIfs();
         
-        // First, collect all skip patterns grouped by their merge node
-        Map<Node, List<SkipPattern>> skipsByMerge = new LinkedHashMap<>();
+        // First, collect all skip patterns grouped by their actual convergence point
+        // (not just the if's merge, but where branches first meet)
+        Map<Node, List<SkipPattern>> skipsByConvergence = new LinkedHashMap<>();
         
         for (LoopStructure loop : mainLoops.values()) {
             for (IfStructure ifStruct : ifs) {
@@ -942,25 +943,60 @@ public class StructureDetector {
                 if (mergeNode == null) continue;
                 if (!loop.body.contains(mergeNode)) continue;
                 
+                // Find the effective merge point:
+                // 1. If one branch goes directly to a back-edge source (loop continuation), use that
+                // 2. Otherwise, find the first convergence point
+                Node effectiveMerge = null;
+                boolean branchGoesDirectlyToMerge = false;
+                
+                // Check if either branch goes directly to a back-edge source (inner loop continuation)
+                for (LoopStructure innerLoop : loops) {
+                    if (!loop.body.contains(innerLoop.header)) continue; // Not a nested loop
+                    
+                    Node backEdgeSrc = innerLoop.backEdgeSource;
+                    if (backEdgeSrc != null && loop.body.contains(backEdgeSrc)) {
+                        // Check if either branch goes directly to this back-edge source
+                        if (trueBranch.equals(backEdgeSrc) || falseBranch.equals(backEdgeSrc)) {
+                            effectiveMerge = backEdgeSrc;
+                            branchGoesDirectlyToMerge = true;
+                            break;
+                        }
+                    }
+                }
+                
+                // If no back-edge source found, use first convergence
+                if (effectiveMerge == null) {
+                    Node convergence = findFirstConvergence(trueBranch, falseBranch, loop);
+                    effectiveMerge = convergence != null ? convergence : mergeNode;
+                }
+                
+                // If one branch goes directly to the merge, create a block
+                // This handles patterns like: if (cond) { complex_body } else { goto merge }
+                if (branchGoesDirectlyToMerge) {
+                    // The condition itself needs a block from cond to effectiveMerge
+                    skipsByConvergence.computeIfAbsent(effectiveMerge, k -> new ArrayList<>())
+                               .add(new SkipPattern(cond, cond, effectiveMerge, loop));
+                }
+                
                 // Check true branch for skip
-                Node skipSource = findDirectJumpToMergeInLoop(trueBranch, mergeNode, loop);
+                Node skipSource = findDirectJumpToMergeInLoop(trueBranch, effectiveMerge, loop);
                 if (skipSource != null) {
-                    skipsByMerge.computeIfAbsent(mergeNode, k -> new ArrayList<>())
-                               .add(new SkipPattern(cond, skipSource, mergeNode, loop));
+                    skipsByConvergence.computeIfAbsent(effectiveMerge, k -> new ArrayList<>())
+                               .add(new SkipPattern(cond, skipSource, effectiveMerge, loop));
                 }
                 
                 // Check false branch for skip
-                skipSource = findDirectJumpToMergeInLoop(falseBranch, mergeNode, loop);
+                skipSource = findDirectJumpToMergeInLoop(falseBranch, effectiveMerge, loop);
                 if (skipSource != null) {
-                    skipsByMerge.computeIfAbsent(mergeNode, k -> new ArrayList<>())
-                               .add(new SkipPattern(cond, skipSource, mergeNode, loop));
+                    skipsByConvergence.computeIfAbsent(effectiveMerge, k -> new ArrayList<>())
+                               .add(new SkipPattern(cond, skipSource, effectiveMerge, loop));
                 }
             }
         }
         
-        // For each merge point, find the outermost condition that needs a block
-        for (Map.Entry<Node, List<SkipPattern>> entry : skipsByMerge.entrySet()) {
-            Node mergeNode = entry.getKey();
+        // For each convergence point, find the outermost condition that needs a block
+        for (Map.Entry<Node, List<SkipPattern>> entry : skipsByConvergence.entrySet()) {
+            Node convergencePoint = entry.getKey();
             List<SkipPattern> patterns = entry.getValue();
             
             if (patterns.isEmpty()) continue;
@@ -968,13 +1004,13 @@ public class StructureDetector {
             // Find the earliest condition node that dominates all skip patterns for this merge
             Node blockStart = findEarliestSkipBlockStart(patterns, ifs);
             
-            if (blockStart != null && !blockStart.equals(mergeNode)) {
+            if (blockStart != null && !blockStart.equals(convergencePoint)) {
                 String label = blockStart.getLabel() + "_block";
                 
                 // Check if this block already exists
                 boolean exists = false;
                 for (LabeledBlockStructure block : labeledBlocks) {
-                    if (block.startNode.equals(blockStart) && block.endNode.equals(mergeNode)) {
+                    if (block.startNode.equals(blockStart) && block.endNode.equals(convergencePoint)) {
                         exists = true;
                         break;
                     }
@@ -982,7 +1018,7 @@ public class StructureDetector {
                 
                 if (!exists) {
                     LoopStructure loop = patterns.get(0).loop;
-                    addLabeledBlock(label, blockStart, mergeNode, mainLoops);
+                    addLabeledBlock(label, blockStart, convergencePoint, mainLoops);
                 }
             }
         }
@@ -1109,6 +1145,57 @@ public class StructureDetector {
                 }
             }
         }
+        return null;
+    }
+    
+    /**
+     * Finds the first convergence point where both branches of a condition meet.
+     * This is the earliest node that both branches eventually reach.
+     */
+    private Node findFirstConvergence(Node trueBranch, Node falseBranch, LoopStructure loop) {
+        // BFS from both branches simultaneously to find first common node
+        Set<Node> trueReachable = new HashSet<>();
+        Set<Node> falseReachable = new HashSet<>();
+        Queue<Node> trueQueue = new LinkedList<>();
+        Queue<Node> falseQueue = new LinkedList<>();
+        
+        trueQueue.add(trueBranch);
+        falseQueue.add(falseBranch);
+        
+        while (!trueQueue.isEmpty() || !falseQueue.isEmpty()) {
+            // Expand from true branch
+            if (!trueQueue.isEmpty()) {
+                Node current = trueQueue.poll();
+                if (loop.body.contains(current) && !trueReachable.contains(current)) {
+                    if (falseReachable.contains(current)) {
+                        return current; // Found convergence
+                    }
+                    trueReachable.add(current);
+                    for (Node succ : current.succs) {
+                        if (loop.body.contains(succ)) {
+                            trueQueue.add(succ);
+                        }
+                    }
+                }
+            }
+            
+            // Expand from false branch
+            if (!falseQueue.isEmpty()) {
+                Node current = falseQueue.poll();
+                if (loop.body.contains(current) && !falseReachable.contains(current)) {
+                    if (trueReachable.contains(current)) {
+                        return current; // Found convergence
+                    }
+                    falseReachable.add(current);
+                    for (Node succ : current.succs) {
+                        if (loop.body.contains(succ)) {
+                            falseQueue.add(succ);
+                        }
+                    }
+                }
+            }
+        }
+        
         return null;
     }
     
