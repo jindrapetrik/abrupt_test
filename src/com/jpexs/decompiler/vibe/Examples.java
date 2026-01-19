@@ -94,8 +94,8 @@ public class Examples {
         runExample("Example 1: Simple If-Else",
             "digraph {\n" +
             "  entry->if_cond;\n" +
-            "  if_cond->then;\n" +
             "  if_cond->else;\n" +
+            "  if_cond->then;\n" +
             "  then->merge;\n" +
             "  else->merge;\n" +
             "  merge->exit;\n" +
@@ -542,6 +542,17 @@ public class Examples {
             "  end1->start1;\n" +
             "}",
             true
+        );
+        
+        // Example 20: Simple if no else
+        runExample("Example 20: Simple If no else",
+            "digraph {\n" +
+            "  entry->if_cond;\n" +
+            "  if_cond->merge;\n" +
+            "  if_cond->else;\n" +
+            "  else->merge;\n" +
+            "  merge->exit;\n" +
+            "}"
         );
     }
 }
