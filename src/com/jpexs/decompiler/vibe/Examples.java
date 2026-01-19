@@ -119,8 +119,8 @@ public class Examples {
         runExample("Example 2: While Loop",
             "digraph {\n" +
             "  entry->loop_header;\n" +
-            "  loop_header->loop_body;\n" +
             "  loop_header->exit;\n" +
+            "  loop_header->loop_body;\n" +
             "  loop_body->loop_header;\n" +
             "}"
         );
@@ -141,8 +141,8 @@ public class Examples {
         runExample("Example 3: Loop with Break and Continue",
             "digraph {\n" +
             "  entry->loop_header;\n" +
-            "  loop_header->body_1;\n" +
             "  loop_header->exit;\n" +
+            "  loop_header->body_1;\n" +
             "  body_1->cond_break;\n" +
             "  cond_break->body_2;\n" +
             "  cond_break->exit;\n" +
@@ -178,10 +178,10 @@ public class Examples {
         runExample("Example 4: Nested Loops",
             "digraph {\n" +
             "  entry->outer_header;\n" +
-            "  outer_header->inner_header;\n" +
             "  outer_header->exit;\n" +
-            "  inner_header->inner_body;\n" +
+            "  outer_header->inner_header;\n" +
             "  inner_header->outer_end;\n" +
+            "  inner_header->inner_body;\n" +
             "  inner_body->inner_header;\n" +
             "  outer_end->outer_header;\n" +
             "}"
@@ -361,8 +361,8 @@ public class Examples {
             "digraph {\n" +
             "  entry->body;\n" +
             "  body->cond;\n" +
-            "  cond->body;\n" +
             "  cond->exit;\n" +
+            "  cond->body;\n" +
             "}"
         );
         /*
