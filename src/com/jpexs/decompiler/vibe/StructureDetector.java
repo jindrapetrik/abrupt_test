@@ -3175,14 +3175,14 @@ public class StructureDetector {
                 return result;
             }
             
-            // Standard if-else
-            Set<Node> trueVisited = new HashSet<>(visited);
-            List<Statement> onTrue = generateStatements(ifStruct.trueBranch, trueVisited, loopHeaders, ifConditions, blockStarts, labeledBreakEdges, loopsNeedingLabels, currentLoop, currentBlock, ifStruct.mergeNode, switchStarts);
-            
+            // Standard if-else - negate condition and swap branches so falseBranch content becomes 'then'
             Set<Node> falseVisited = new HashSet<>(visited);
-            List<Statement> onFalse = generateStatements(ifStruct.falseBranch, falseVisited, loopHeaders, ifConditions, blockStarts, labeledBreakEdges, loopsNeedingLabels, currentLoop, currentBlock, ifStruct.mergeNode, switchStarts);
+            List<Statement> onTrue = generateStatements(ifStruct.falseBranch, falseVisited, loopHeaders, ifConditions, blockStarts, labeledBreakEdges, loopsNeedingLabels, currentLoop, currentBlock, ifStruct.mergeNode, switchStarts);
             
-            result.add(new IfStatement(node, false, onTrue, onFalse));
+            Set<Node> trueVisited = new HashSet<>(visited);
+            List<Statement> onFalse = generateStatements(ifStruct.trueBranch, trueVisited, loopHeaders, ifConditions, blockStarts, labeledBreakEdges, loopsNeedingLabels, currentLoop, currentBlock, ifStruct.mergeNode, switchStarts);
+            
+            result.add(new IfStatement(node, true, onTrue, onFalse));
             
             // Continue after merge
             if (ifStruct.mergeNode != null) {
