@@ -1186,11 +1186,17 @@ public class StructureDetector {
                 // Check if either branch goes directly to a back-edge source (inner loop continuation)
                 for (LoopStructure innerLoop : loops) {
                     if (!loop.body.contains(innerLoop.header)) continue; // Not a nested loop
+                    if (innerLoop.header.equals(loop.header)) continue; // Skip loops with same header (different sizes)
                     
                     Node backEdgeSrc = innerLoop.backEdgeSource;
                     if (backEdgeSrc != null && loop.body.contains(backEdgeSrc)) {
                         // Check if either branch goes directly to this back-edge source
-                        if (trueBranch.equals(backEdgeSrc) || falseBranch.equals(backEdgeSrc)) {
+                        if (trueBranch.equals(backEdgeSrc)) {
+                            // First branch goes directly to back-edge source - this is NOT a skip pattern.
+                            // It's a normal if statement: if (!cond) { falseBranch } // then continue
+                            // Don't set effectiveMerge to skip block creation
+                            continue;
+                        } else if (falseBranch.equals(backEdgeSrc)) {
                             effectiveMerge = backEdgeSrc;
                             branchGoesDirectlyToMerge = true;
                             break;
@@ -2210,14 +2216,25 @@ public class StructureDetector {
             loopExitPoint = loopCondIf.falseBranch;
         }
         
+        // Check if the start is the back-edge source - this is NOT a continue, it's normal loop body
+        // When the branch goes directly to the back-edge source, it will eventually continue the loop,
+        // but we shouldn't treat this as a "continue" statement - it's just normal loop execution
+        boolean startIsBackEdgeSrc = start.equals(currentLoop.backEdgeSource);
+        
         while (current != null && !visited.contains(current)) {
             visited.add(current);
             
-            // If this is the loop header, this is a continue
+            // If this is the loop header, this might be a continue
             // Check this BEFORE the conditional check since the header is often a conditional
             // BUT: only if we haven't gone outside the loop yet - if we went outside and came back,
             // it's actually a break that happens to lead back to the loop header through the outer loop
+            // ALSO: if we started from the back-edge source, this is normal loop continuation, not a continue stmt
             if (current.equals(currentLoop.header) && !foundOutsideLoop) {
+                if (startIsBackEdgeSrc) {
+                    // Starting from back-edge source to loop header is NOT a continue statement
+                    // It's normal loop body execution that will be followed by more loop iterations
+                    return null; // Return null to indicate normal flow (not a break/continue target)
+                }
                 // Return continue result with loop label
                 String loopLabel = getLoopLabel(currentLoop.header);
                 int loopLabelId = getLoopLabelId(currentLoop.header);
@@ -3774,6 +3791,20 @@ public class StructureDetector {
                     }
                     
                     // B2) If true branch leads to continue, flatten the else
+                    // Standard handling - false branch is break, true branch continues
+                    // This takes PRIORITY over continue handling to prefer: if (!cond) { break; } body
+                    // over: if (cond) { body; continue; }
+                    if (falseBranchTarget != null && !falseBranchTarget.isContinue) {
+                        List<Node> falsePath = findPathToTarget(ifStruct.falseBranch, falseBranchTarget.target, ifConditions);
+                        List<Statement> breakBody = outputPathAndBreakStatements(falsePath, falseBranchTarget.breakLabel, falseBranchTarget.breakLabelId, currentLoop, currentBlock, falseBranchTarget.target);
+                        result.add(new IfStatement(node, true, breakBody));  // negated condition
+                        // Continue with true branch at same indent level (flattened)
+                        Set<Node> thenVisited = new HashSet<>(visited);
+                        thenVisited.add(node);
+                        result.addAll(generateStatementsInLoop(ifStruct.trueBranch, thenVisited, loopHeaders, ifConditions, labeledBreakEdges, blockStarts, loopsNeedingLabels, currentLoop, currentBlock, stopAt, switchStarts));
+                        return result;
+                    }
+                    
                     if (trueBranchTarget != null && trueBranchTarget.isContinue) {
                         List<Node> path = findPathToTarget(ifStruct.trueBranch, trueBranchTarget.target, ifConditions);
                         List<Statement> continueBody = outputPathAndContinueStatements(path, trueBranchTarget.breakLabel, trueBranchTarget.breakLabelId);
@@ -3799,18 +3830,7 @@ public class StructureDetector {
                         return result;
                     }
                     
-                    // Standard handling - false branch is break, true branch continues
-                    if (falseBranchTarget != null) {
-                        List<Node> falsePath = findPathToTarget(ifStruct.falseBranch, falseBranchTarget.target, ifConditions);
-                        List<Statement> breakBody = outputPathAndBreakStatements(falsePath, falseBranchTarget.breakLabel, falseBranchTarget.breakLabelId, currentLoop, currentBlock, falseBranchTarget.target);
-                        result.add(new IfStatement(node, true, breakBody));
-                        // Continue with true branch at same indent level (flattened)
-                        Set<Node> thenVisited = new HashSet<>(visited);
-                        thenVisited.add(node);
-                        result.addAll(generateStatementsInLoop(ifStruct.trueBranch, thenVisited, loopHeaders, ifConditions, labeledBreakEdges, blockStarts, loopsNeedingLabels, currentLoop, currentBlock, stopAt, switchStarts));
-                        return result;
-                    }
-                    
+                    // Fallback when only false branch has break (no continue in true branch)
                     // Fallback to original logic
                     if (!currentLoop.body.contains(ifStruct.trueBranch)) {
                         List<Statement> breakBody = new ArrayList<>();
@@ -4050,6 +4070,24 @@ public class StructureDetector {
                 } else {
                     result.addAll(outputPathAndBreakStatements(falsePath, falseBranchTarget.breakLabel, falseBranchTarget.breakLabelId, currentLoop, currentBlock, falseBranchTarget.target));
                 }
+                return result;
+            }
+            
+            // D) True branch is back-edge source (normal loop continuation) - treat as "merge on 1st branch"
+            // Rule: merge on 1st branch => if (!cond) { branch2; } then continue with branch1
+            // This handles cases where the first branch leads to normal loop continuation
+            if (trueBranchTarget == null && falseBranchTarget == null &&
+                ifStruct.trueBranch.equals(currentLoop.backEdgeSource)) {
+                // Generate: if (!cond) { falseBranch content } trueBranch;
+                Set<Node> falseVisited = new HashSet<>(visited);
+                // Use hel2 (the trueBranch/back-edge source) as the stopAt for falseBranch processing
+                // This ensures we process ifa8 content up to the point where it would merge back
+                List<Statement> onTrue = generateStatementsInLoop(ifStruct.falseBranch, falseVisited, loopHeaders, ifConditions, labeledBreakEdges, blockStarts, loopsNeedingLabels, currentLoop, currentBlock, ifStruct.trueBranch, switchStarts);
+                result.add(new IfStatement(node, true, onTrue));  // negated condition
+                // After the if, continue with the true branch (back-edge source)
+                Set<Node> trueVisited = new HashSet<>(visited);
+                trueVisited.add(node);
+                result.addAll(generateStatementsInLoop(ifStruct.trueBranch, trueVisited, loopHeaders, ifConditions, labeledBreakEdges, blockStarts, loopsNeedingLabels, currentLoop, currentBlock, stopAt, switchStarts));
                 return result;
             }
             
