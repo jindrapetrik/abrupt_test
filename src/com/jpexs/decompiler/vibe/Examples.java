@@ -210,8 +210,8 @@ public class Examples {
         runExample("Example 5: If Inside Loop",
             "digraph {\n" +
             "  entry->loop_header;\n" +
-            "  loop_header->if_cond;\n" +
             "  loop_header->exit;\n" +
+            "  loop_header->if_cond;\n" +
             "  if_cond->if_else;\n" +
             "  if_cond->if_then;\n" +
             "  if_then->loop_end;\n" +
