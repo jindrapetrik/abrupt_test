@@ -2074,18 +2074,28 @@ public class StructureDetector {
     }
     
     private Node findBreakLabelLoop(Node breakTarget, Map<Node, LoopStructure> loopHeaders, LoopStructure currentLoop) {
-        // Check which loop this target is outside of
+        // First, check if the target is inside an outer loop but outside current loop
+        // In this case, we need a labeled break for the CURRENT loop
         for (LoopStructure loop : loopHeaders.values()) {
             if (loop == currentLoop) continue;
             
-            // If this loop contains the current loop and the target is outside this loop
+            // If the outer loop contains both the current loop AND the break target,
+            // but the current loop doesn't contain the target,
+            // then we're breaking out of the current loop to stay in the outer loop
+            // This requires a labeled break to the current loop
+            if (loop.body.contains(currentLoop.header) && loop.body.contains(breakTarget)) {
+                // Target is inside an outer loop - need to label break to current loop
+                return currentLoop.header;
+            }
+            
+            // If this outer loop contains the current loop and the target is outside this outer loop
             if (loop.body.contains(currentLoop.header) && !loop.body.contains(breakTarget)) {
-                // Return loop header node
+                // Breaking out of the outer loop entirely
                 return loop.header;
             }
         }
         
-        // Breaking out of current loop (or can't determine) - no label needed
+        // Breaking out of current loop to a target outside all loops - no label needed
         return null;
     }
 
@@ -2145,7 +2155,9 @@ public class StructureDetector {
             
             // If this is the loop header, this is a continue
             // Check this BEFORE the conditional check since the header is often a conditional
-            if (current.equals(currentLoop.header)) {
+            // BUT: only if we haven't gone outside the loop yet - if we went outside and came back,
+            // it's actually a break that happens to lead back to the loop header through the outer loop
+            if (current.equals(currentLoop.header) && !foundOutsideLoop) {
                 // Return continue result with loop label
                 String loopLabel = getLoopLabel(currentLoop.header);
                 int loopLabelId = getLoopLabelId(currentLoop.header);
@@ -2160,6 +2172,26 @@ public class StructureDetector {
             // Track if we've gone outside the loop
             if (!currentLoop.body.contains(current)) {
                 foundOutsideLoop = true;
+                
+                // Check if this is the loop's natural exit point
+                // This should be reported as a simple break (without label for innermost loop)
+                if (current.equals(loopExitPoint)) {
+                    return new BranchTargetResult(current, "", -1, false);
+                }
+                
+                // Check if this node is a labeled block's end node
+                for (LabeledBlockStructure block : labeledBlocks) {
+                    if (current.equals(block.endNode) && !block.breaks.isEmpty() && !block.label.equals(RETURN_BLOCK_LABEL)) {
+                        return new BranchTargetResult(current, block.label, block.labelId, true);
+                    }
+                }
+                
+                // We've gone outside the loop - this is a break target
+                // Return immediately rather than continuing to follow the path
+                // (which might lead back into the loop through an outer loop)
+                String breakLabel = findBreakLabel(current, loopHeaders, currentLoop);
+                int breakLabelId = findBreakLabelId(current, loopHeaders, currentLoop);
+                return new BranchTargetResult(current, breakLabel, breakLabelId, false);
             }
             
             // Check if this is the loop's natural exit point
@@ -3607,11 +3639,13 @@ public class StructureDetector {
                     // B) If true branch leads to break, flatten the else
                     if (trueBranchTarget != null && !trueBranchTarget.isContinue) {
                         List<Node> path = findPathToTarget(ifStruct.trueBranch, trueBranchTarget.target, ifConditions);
-                        // Use loop break label when target is outside the loop (e.g., inside a switch case breaking out of loop)
+                        // Use the break label from trueBranchTarget, which is computed by findBranchTarget
+                        // This correctly handles breaks to outer loops and labeled blocks
                         String breakLabel = trueBranchTarget.breakLabel;
                         int breakLabelId = trueBranchTarget.breakLabelId;
-                        if (!currentLoop.body.contains(trueBranchTarget.target)) {
-                            // Target is outside the loop - use loop label instead of labeled block
+                        // Only override if no label was provided and we need one for labeled block breaks
+                        if ((breakLabel == null || breakLabel.isEmpty()) && !currentLoop.body.contains(trueBranchTarget.target)) {
+                            // Target is outside the loop - check if we need a loop label
                             breakLabel = loopsNeedingLabels.contains(currentLoop.header) ? getLoopLabel(currentLoop.header) : null;
                             breakLabelId = loopsNeedingLabels.contains(currentLoop.header) ? getLoopLabelId(currentLoop.header) : -1;
                         }
