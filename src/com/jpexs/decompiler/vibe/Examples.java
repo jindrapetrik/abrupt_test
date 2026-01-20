@@ -1313,28 +1313,26 @@ public class Examples {
             "}"
         );
         /*
-        Actual output (algorithm produces extra block_1 wrapper due to skip pattern detection):
+        Expected output (no unnecessary block_1 wrapper):
         
         start;
+        loc0000;
         block_0: {
-            loc0000;
-            loop_1: while(true) {
+            while(true) {
                 if (!loc007b) {
                     break;
                 }
-                block_1: {
-                    if (!loc0024) {
-                        if (!loc0038) {
-                            loc0041;
-                            break;
-                        }
-                        if (!loc0047) {
-                            loc0050;
-                            break;
-                        }
-                    } else {
-                        loc005a;
+                if (!loc0024) {
+                    if (!loc0038) {
+                        loc0041;
+                        break;
                     }
+                    if (!loc0047) {
+                        loc0050;
+                        break;
+                    }
+                } else {
+                    loc005a;
                 }
                 if (!loc0064) {
                     loc006d;
