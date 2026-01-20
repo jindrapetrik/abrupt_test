@@ -1220,5 +1220,127 @@ public class Examples {
             end;
         }
         */
+        
+        // Example 25: Complex nested ifs with converging paths
+        runExample("Example 25: Complex nested ifs with converging paths",
+            "digraph pcode {\n" +
+            "  start -> loc0000;\n" +
+            "  loc00d9 -> loc00f9;\n" +
+            "  loc00d9 -> loc00ec;\n" +
+            "  loc0015 -> loc0036;\n" +
+            "  loc0015 -> loc0029;\n" +
+            "  loc009c -> loc010a;\n" +
+            "  loc005c -> loc007f;\n" +
+            "  loc005c -> loc006f;\n" +
+            "  loc00ac -> loc00cf;\n" +
+            "  loc00ac -> loc00bf;\n" +
+            "  loc006f -> loc010a;\n" +
+            "  loc00f9 -> loc0103;\n" +
+            "  loc0036 -> loc00d9;\n" +
+            "  loc0036 -> loc0049;\n" +
+            "  loc00bf -> loc010a;\n" +
+            "  loc0103 -> loc0015;\n" +
+            "  loc0103 -> loc010a;\n" +
+            "  loc007f -> loc0089;\n" +
+            "  loc0000 -> loc0103;\n" +
+            "  loc0089 -> loc00ac;\n" +
+            "  loc0089 -> loc009c;\n" +
+            "  loc00cf -> loc00d9;\n" +
+            "  loc0049 -> loc0089;\n" +
+            "  loc0049 -> loc005c;\n" +
+            "}"
+        );
+        /*
+        Expected output:
+        
+        start;
+        loc0000;
+        block_0: {
+            while(true) {
+                if (!loc0103) {
+                    break;
+                }
+                if (!loc0015) {
+                    loc0029;
+                    break block_0;
+                }
+                if (!loc0036) {
+                    if (!loc0049) {
+                        if (!loc005c) {
+                            loc006f;
+                            break;
+                        }
+                        loc007f;
+                    }
+                    if (!loc0089) {
+                        loc009c;
+                        break;
+                    }
+                    if (!loc00ac) {
+                        loc00bf;
+                        break;
+                    }
+                    loc00cf;
+                }
+                if (!loc00d9) {
+                    loc00ec;
+                    break block_0;
+                }
+                loc00f9;
+            }
+            loc010a;
+        }
+        */
+        
+        // Example 26: Loop with if-else branches converging to common point
+        runExample("Example 26: Loop with if-else branches converging to common point",
+            "digraph pcode {\n" +
+            "  start -> loc0000;\n" +
+            "  loc005a -> loc0064;\n" +
+            "  loc007b -> loc0024;\n" +
+            "  loc007b -> loc0082;\n" +
+            "  loc0038 -> loc0047;\n" +
+            "  loc0038 -> loc0041;\n" +
+            "  loc0064 -> loc007b;\n" +
+            "  loc0064 -> loc006d;\n" +
+            "  loc0041 -> loc0082;\n" +
+            "  loc0000 -> loc007b;\n" +
+            "  loc0024 -> loc005a;\n" +
+            "  loc0024 -> loc0038;\n" +
+            "  loc0047 -> loc0064;\n" +
+            "  loc0047 -> loc0050;\n" +
+            "  loc0050 -> loc0082;\n" +
+            "}"
+        );
+        /*
+        Expected output (no unnecessary block_1 wrapper):
+        
+        start;
+        loc0000;
+        block_0: {
+            while(true) {
+                if (!loc007b) {
+                    break;
+                }
+                if (!loc0024) {
+                    if (!loc0038) {
+                        loc0041;
+                        break;
+                    }
+                    if (!loc0047) {
+                        loc0050;
+                        break;
+                    }
+                } else {
+                    loc005a;
+                }
+                if (!loc0064) {
+                    loc006d;
+                    break block_0;
+                }
+            }
+            loc0082;
+        }
+        */
     }
 }

@@ -1394,6 +1394,49 @@ public class StructureDetector {
             Node blockStart = findEarliestSkipBlockStart(patterns, ifs);
             
             if (blockStart != null && !blockStart.equals(convergencePoint)) {
+                // Check if this is a normal if-else that converges at the convergence point.
+                // If the block start is an if-condition whose detected merge point equals
+                // the convergence point, and both branches can reach it, then it's a normal
+                // if-else structure that doesn't need a labeled block.
+                boolean isNormalIfElse = false;
+                for (IfStructure ifStruct : ifs) {
+                    if (ifStruct.conditionNode.equals(blockStart)) {
+                        // Found the if for the block start
+                        Node trueBranch = ifStruct.trueBranch;
+                        Node falseBranch = ifStruct.falseBranch;
+                        Node mergeNode = ifStruct.mergeNode;
+                        
+                        // If the if's merge point equals the convergence point,
+                        // check if both branches can reach it
+                        if (mergeNode != null && mergeNode.equals(convergencePoint)) {
+                            // Get the loop containing this if
+                            LoopStructure containingLoop = null;
+                            for (LoopStructure loop : mainLoops.values()) {
+                                if (loop.body.contains(blockStart)) {
+                                    containingLoop = loop;
+                                    break;
+                                }
+                            }
+                            
+                            if (containingLoop != null) {
+                                boolean trueReaches = canReachNodeWithin(trueBranch, convergencePoint, containingLoop.body);
+                                boolean falseReaches = canReachNodeWithin(falseBranch, convergencePoint, containingLoop.body);
+                                
+                                if (trueReaches && falseReaches) {
+                                    // Both branches naturally converge at the merge point
+                                    // This is a normal if-else, not a skip pattern
+                                    isNormalIfElse = true;
+                                }
+                            }
+                        }
+                        break;
+                    }
+                }
+                
+                if (isNormalIfElse) {
+                    continue; // Skip creating block for normal if-else
+                }
+                
                 String oldLabel = blockStart.getLabel() + "_block";
                 String label = getBlockLabel(oldLabel);
                 int labelId = getBlockLabelId(oldLabel);
@@ -1686,6 +1729,42 @@ public class StructureDetector {
         }
         
         return null;
+    }
+    
+    /**
+     * Checks if a node can reach a target node within a set of allowed nodes.
+     * 
+     * @param start the starting node
+     * @param target the target node to reach
+     * @param allowedNodes the set of nodes to search within
+     * @return true if target is reachable from start within allowedNodes
+     */
+    private boolean canReachNodeWithin(Node start, Node target, Set<Node> allowedNodes) {
+        if (start == null || target == null) {
+            return false;
+        }
+        if (start.equals(target)) {
+            return true;
+        }
+        
+        Set<Node> visited = new HashSet<>();
+        Queue<Node> queue = new LinkedList<>();
+        queue.add(start);
+        
+        while (!queue.isEmpty()) {
+            Node current = queue.poll();
+            if (!visited.add(current)) continue; // Already visited
+            
+            for (Node succ : current.succs) {
+                if (succ.equals(target)) {
+                    return true;
+                }
+                if (allowedNodes.contains(succ) && !visited.contains(succ)) {
+                    queue.add(succ);
+                }
+            }
+        }
+        return false;
     }        
 
     /**
@@ -2012,11 +2091,31 @@ public class StructureDetector {
         }
         
         // We need a top-level labeled block
-        // Find the start node (first node after entry that leads to a loop)
+        // Find the start node - the outermost loop header
+        // This ensures nodes before the loop are outside the block
         Node blockStart = null;
-        for (Node succ : entryNode.succs) {
-            blockStart = succ;
-            break;
+        for (LoopStructure loop : loops) {
+            // Find the outermost loop (not contained in any other loop)
+            boolean isOutermost = true;
+            for (LoopStructure other : loops) {
+                if (other != loop && other.body.contains(loop.header)) {
+                    isOutermost = false;
+                    break;
+                }
+            }
+            
+            if (isOutermost) {
+                blockStart = loop.header;
+                break;
+            }
+        }
+        
+        // Fallback to first successor of entry if no loop found
+        if (blockStart == null) {
+            for (Node succ : entryNode.succs) {
+                blockStart = succ;
+                break;
+            }
         }
         
         if (blockStart == null || exitNode == null) {
@@ -2256,10 +2355,34 @@ public class StructureDetector {
             result.add(new ExpressionStatement(entryNode));
             visited.add(entryNode);
             
-            // Generate the rest of the code inside the block
-            List<Statement> blockBody = new ArrayList<>();
+            // Output nodes between entry and block start (outside the block)
+            // These are nodes that come before the loop but after entry
+            Node current = null;
             for (Node succ : entryNode.succs) {
-                blockBody.addAll(generateStatements(succ, visited, loopHeaders, ifConditions, blockStarts, labeledBreakEdges, loopsNeedingLabels, null, returnBlock, null, switchStarts));
+                current = succ;
+                break;
+            }
+            
+            // Walk through single-successor nodes until we reach the block start
+            // The visited check prevents infinite loops if there's a cycle
+            while (current != null && !current.equals(returnBlock.startNode)) {
+                if (visited.contains(current)) {
+                    break; // Already visited - prevent cycle
+                }
+                if (current.succs.size() == 1) {
+                    visited.add(current);
+                    result.add(new ExpressionStatement(current));
+                    current = current.succs.get(0);
+                } else {
+                    // Multi-successor node - stop here
+                    break;
+                }
+            }
+            
+            // Generate the code inside the block starting from block start
+            List<Statement> blockBody = new ArrayList<>();
+            if (!visited.contains(returnBlock.startNode)) {
+                blockBody.addAll(generateStatements(returnBlock.startNode, visited, loopHeaders, ifConditions, blockStarts, labeledBreakEdges, loopsNeedingLabels, null, returnBlock, null, switchStarts));
             }
             
             // Add return block
@@ -4361,7 +4484,26 @@ public class StructureDetector {
                 return result;
             }
             
-            // E) False branch is a continue - flatten the structure
+            // E) True branch is reachable from false branch within the loop - use true branch as merge point
+            // This handles cases where both branches eventually converge at the true branch node
+            // Pattern: if (!cond) { falseBranch content } then trueBranch;
+            if (trueBranchTarget == null && falseBranchTarget == null &&
+                currentLoop.body.contains(ifStruct.trueBranch) &&
+                isReachableWithinLoop(ifStruct.falseBranch, ifStruct.trueBranch, currentLoop)) {
+                // Generate: if (!cond) { falseBranch content up to trueBranch } trueBranch;
+                Set<Node> falseVisited = new HashSet<>(visited);
+                // Use trueBranch as the stopAt for falseBranch processing
+                // This ensures we process false branch content up to the merge point
+                List<Statement> onTrue = generateStatementsInLoop(ifStruct.falseBranch, falseVisited, loopHeaders, ifConditions, labeledBreakEdges, blockStarts, loopsNeedingLabels, currentLoop, currentBlock, ifStruct.trueBranch, switchStarts);
+                result.add(new IfStatement(node, true, onTrue));  // negated condition
+                // After the if, continue with the true branch (merge point)
+                Set<Node> trueVisited = new HashSet<>(visited);
+                trueVisited.add(node);
+                result.addAll(generateStatementsInLoop(ifStruct.trueBranch, trueVisited, loopHeaders, ifConditions, labeledBreakEdges, blockStarts, loopsNeedingLabels, currentLoop, currentBlock, stopAt, switchStarts));
+                return result;
+            }
+            
+            // F) False branch is a continue - flatten the structure
             // When false branch ends with continue, use simple if (no else)
             // since continue returns to loop header, code after the if only runs when condition is false
             if (falseBranchTarget != null && falseBranchTarget.isContinue && trueBranchTarget == null) {
@@ -4531,6 +4673,15 @@ public class StructureDetector {
                 result.add(new BreakStatement(currentBlock.labelId));
             } else {
                 result.add(new BreakStatement(breakLabel, breakLabelId));
+            }
+        } else if (breakLabelId == -1) {
+            // breakLabel is empty AND breakLabelId is -1 - this is a break to the natural loop exit
+            // Use unlabeled break (no label string, just the loop ID for tracking)
+            // The BreakStatement(int) constructor creates a break without a visible label
+            if (currentLoop != null) {
+                result.add(new BreakStatement(getLoopLabelId(currentLoop.header)));
+            } else {
+                result.add(new BreakStatement(-1));
             }
         } else if (currentBlock != null && currentLoop != null) {
             result.add(new BreakStatement(getLoopLabel(currentLoop.header), getLoopLabelId(currentLoop.header)));
