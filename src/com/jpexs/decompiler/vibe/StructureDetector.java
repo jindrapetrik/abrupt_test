@@ -4553,7 +4553,8 @@ public class StructureDetector {
             }
         } else if (breakLabelId == -1) {
             // breakLabel is empty AND breakLabelId is -1 - this is a break to the natural loop exit
-            // Use unlabeled break (even if we're inside a block)
+            // Use unlabeled break (no label string, just the loop ID for tracking)
+            // The BreakStatement(int) constructor creates a break without a visible label
             if (currentLoop != null) {
                 result.add(new BreakStatement(getLoopLabelId(currentLoop.header)));
             } else {
