@@ -1450,5 +1450,38 @@ public class Examples {
         loc0112;
         loc0113;
         */
+        
+        // Example 29: Loop with if-else header and break after merge
+        runExample("Example 29: Loop with if-else header and break after merge",
+            "digraph pcode {\n" +
+            "start -> loc0000;\n" +
+            "loc0067 -> loc0025;\n" +
+            "loc0067 -> loc007b;\n" +
+            "loc007b -> loc007c;\n" +
+            "loc0044 -> loc0067;\n" +
+            "loc0000 -> loc0025;\n" +
+            "loc0058 -> loc0067;\n" +
+            "loc0025 -> loc0058;\n" +
+            "loc0025 -> loc0044;\n" +
+            "}"
+        );
+        /*
+        Expected output:
+        
+        start;
+        loc0000;
+        while(true) {
+            if (!loc0025) {
+                loc0044;
+            } else {
+                loc0058;
+            }
+            if (!loc0067) {
+                break;
+            }
+        }
+        loc007b;
+        loc007c;
+        */
     }
 }
