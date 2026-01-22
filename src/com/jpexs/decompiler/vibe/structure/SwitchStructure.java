@@ -14,16 +14,30 @@ import java.util.List;
 public class SwitchStructure {
     public final Node startNode;         // first condition node
     public final List<SwitchCase> cases; // list of cases
-    public final Node mergeNode;         // where all cases converge (e.g., "end")
+    public final Node mergeNode;         // where most cases converge (switch merge)
+    public final Node outerMergeNode;    // where cases that skip mergeNode go (for labeled block), may be null
     
     public SwitchStructure(Node startNode, List<SwitchCase> cases, Node mergeNode) {
+        this(startNode, cases, mergeNode, null);
+    }
+    
+    public SwitchStructure(Node startNode, List<SwitchCase> cases, Node mergeNode, Node outerMergeNode) {
         this.startNode = startNode;
         this.cases = new ArrayList<>(cases);
         this.mergeNode = mergeNode;
+        this.outerMergeNode = outerMergeNode;
+    }
+    
+    /**
+     * Returns true if this switch has cases that skip the merge node and require a labeled block.
+     */
+    public boolean hasOuterMerge() {
+        return outerMergeNode != null && !outerMergeNode.equals(mergeNode);
     }
     
     @Override
     public String toString() {
-        return "Switch{start=" + startNode + ", cases=" + cases.size() + ", merge=" + mergeNode + "}";
+        String outer = outerMergeNode != null ? ", outerMerge=" + outerMergeNode : "";
+        return "Switch{start=" + startNode + ", cases=" + cases.size() + ", merge=" + mergeNode + outer + "}";
     }
 }

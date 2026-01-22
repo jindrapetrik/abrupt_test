@@ -3857,6 +3857,24 @@ public class StructureDetector {
         // Check if this is a switch start node (before checking labeled blocks and if-conditions)
         SwitchStructure switchStruct = switchStarts != null ? switchStarts.get(node) : null;
         if (switchStruct != null && switchStruct.mergeNode != null && currentLoop.body.contains(switchStruct.mergeNode)) {
+            // Check if we need a labeled block around the switch (for cases that skip the merge)
+            boolean needsOuterBlock = switchStruct.hasOuterMerge() && 
+                                      currentLoop.body.contains(switchStruct.outerMergeNode);
+            String outerBlockLabel = null;
+            int outerBlockLabelId = -1;
+            
+            if (needsOuterBlock) {
+                // Check if there's already a labeled block that matches
+                LabeledBlockStructure existingBlock = blockStarts.get(node);
+                if (existingBlock != null && existingBlock.endNode.equals(switchStruct.outerMergeNode)) {
+                    outerBlockLabel = getBlockLabel(existingBlock.label);
+                    outerBlockLabelId = getBlockLabelId(existingBlock.label);
+                } else {
+                    outerBlockLabelId = globalLabelCounter++;
+                    outerBlockLabel = "block_" + outerBlockLabelId;
+                }
+            }
+            
             // Generate switch statement inside the loop
             List<SwitchStatement.Case> switchCases = new ArrayList<>();
             
@@ -3882,15 +3900,34 @@ public class StructureDetector {
                 // Generate full case body content
                 if (sc.caseBody != null) {
                     Set<Node> caseVisited = new HashSet<>();
-                    Node stopNode = sc.hasBreak ? switchStruct.mergeNode : caseBodyToNextBody.get(sc.caseBody);
+                    // Determine stop node based on case type
+                    Node stopNode;
+                    if (sc.skipsMerge && needsOuterBlock) {
+                        stopNode = switchStruct.outerMergeNode;
+                    } else if (sc.hasBreak) {
+                        stopNode = switchStruct.mergeNode;
+                    } else {
+                        // Fall-through case - stop at next case body or merge
+                        stopNode = caseBodyToNextBody.get(sc.caseBody);
+                        if (stopNode == null) {
+                            stopNode = switchStruct.mergeNode;
+                        }
+                    }
                     List<Statement> bodyStatements = generateStatementsInLoop(sc.caseBody, caseVisited, loopHeaders, ifConditions, labeledBreakEdges, blockStarts, loopsNeedingLabels, currentLoop, currentBlock, stopNode, switchStarts);
                     caseBody.addAll(bodyStatements);
                 }
                 
-                // Add break statement only if this case has a break
+                // Add break statement based on case type
                 if (sc.hasBreak) {
-                    caseBody.add(new BreakStatement(getSwitchLabelId(node)));
+                    if (sc.skipsMerge && needsOuterBlock) {
+                        // Case skips merge - use labeled break to outer block
+                        caseBody.add(new BreakStatement(outerBlockLabel, outerBlockLabelId));
+                    } else {
+                        // Normal switch break
+                        caseBody.add(new BreakStatement(getSwitchLabelId(node)));
+                    }
                 }
+                // If hasBreak is false, case falls through (no break added)
                 
                 if (sc.isDefault) {
                     switchCases.add(new SwitchStatement.Case(caseBody));
@@ -3899,7 +3936,9 @@ public class StructureDetector {
                 }
             }
             
-            result.add(new SwitchStatement(switchCases, getSwitchLabelId(node)));
+            // Build the switch statement
+            List<Statement> switchAndMerge = new ArrayList<>();
+            switchAndMerge.add(new SwitchStatement(switchCases, getSwitchLabelId(node)));
             
             // Mark all switch condition nodes as visited
             for (SwitchCase sc : switchStruct.cases) {
@@ -3908,8 +3947,20 @@ public class StructureDetector {
                 }
             }
             
-            // Continue after the switch (at the merge node)
-            result.addAll(generateStatementsInLoop(switchStruct.mergeNode, visited, loopHeaders, ifConditions, labeledBreakEdges, blockStarts, loopsNeedingLabels, currentLoop, currentBlock, stopAt, switchStarts));
+            // Add merge node content after the switch
+            Node effectiveStopAt = needsOuterBlock ? switchStruct.outerMergeNode : stopAt;
+            switchAndMerge.addAll(generateStatementsInLoop(switchStruct.mergeNode, visited, loopHeaders, ifConditions, labeledBreakEdges, blockStarts, loopsNeedingLabels, currentLoop, currentBlock, effectiveStopAt, switchStarts));
+            
+            if (needsOuterBlock) {
+                // Wrap switch + merge in a labeled block
+                result.add(new BlockStatement(outerBlockLabel, outerBlockLabelId, switchAndMerge));
+                
+                // Continue after the outer merge
+                result.addAll(generateStatementsInLoop(switchStruct.outerMergeNode, visited, loopHeaders, ifConditions, labeledBreakEdges, blockStarts, loopsNeedingLabels, currentLoop, currentBlock, stopAt, switchStarts));
+            } else {
+                result.addAll(switchAndMerge);
+            }
+            
             return result;
         }
         
@@ -5111,14 +5162,6 @@ public class StructureDetector {
             Set<Node> allCaseBodies = new HashSet<>(caseBodies);
             allCaseBodies.add(defaultBody);
             
-            // Find the merge node - the common convergence point for the switch
-            // A good merge node is one that:
-            // 1. Is reachable from multiple case bodies
-            // 2. Is not outside a loop (if the switch is in a loop)
-            // 3. Has the highest count of case bodies leading to it
-            Node mergeNode;
-            Map<Node, Integer> reachCount = new HashMap<>();
-            
             // Detect if we're inside a loop
             Node switchLoopHeader = null;
             for (Node loopHead : loopHeaders) {
@@ -5130,79 +5173,150 @@ public class StructureDetector {
                 }
             }
             
-            // For each case body, find reachable nodes
+            // Find the merge node - prefer DIRECT successors of case bodies
+            // Count direct successors (1-step) vs indirect successors (2+ steps)
+            Map<Node, Integer> directCount = new HashMap<>();
+            Map<Node, Integer> indirectCount = new HashMap<>();
+            
             for (Node caseBodyNode : allCaseBodies) {
-                Set<Node> visited = new HashSet<>();
-                Queue<Node> queue = new LinkedList<>();
-                queue.add(caseBodyNode);
+                Set<Node> countedDirect = new HashSet<>();
+                Set<Node> countedIndirect = new HashSet<>();
                 
-                while (!queue.isEmpty()) {
-                    Node current = queue.poll();
-                    if (visited.contains(current)) continue;
-                    visited.add(current);
+                // Level 1: direct successors
+                for (Node succ : caseBodyNode.succs) {
+                    if (conditionChain.contains(succ) || allCaseBodies.contains(succ) || loopHeaders.contains(succ)) {
+                        continue;
+                    }
+                    if (!countedDirect.contains(succ)) {
+                        directCount.put(succ, directCount.getOrDefault(succ, 0) + 1);
+                        countedDirect.add(succ);
+                    }
                     
-                    for (Node succ : current.succs) {
-                        // Skip condition nodes and other case bodies
-                        if (conditionChain.contains(succ) || allCaseBodies.contains(succ)) {
-                            continue;
+                    // Level 2+: indirect successors (via BFS)
+                    Queue<Node> queue = new LinkedList<>();
+                    queue.add(succ);
+                    Set<Node> visited = new HashSet<>();
+                    visited.add(caseBodyNode);
+                    visited.add(succ);
+                    
+                    while (!queue.isEmpty()) {
+                        Node current = queue.poll();
+                        for (Node succ2 : current.succs) {
+                            if (visited.contains(succ2) || conditionChain.contains(succ2) || 
+                                allCaseBodies.contains(succ2) || loopHeaders.contains(succ2)) {
+                                continue;
+                            }
+                            visited.add(succ2);
+                            if (!countedIndirect.contains(succ2) && !countedDirect.contains(succ2)) {
+                                indirectCount.put(succ2, indirectCount.getOrDefault(succ2, 0) + 1);
+                                countedIndirect.add(succ2);
+                            }
+                            queue.add(succ2);
                         }
-                        
-                        // Skip already visited nodes to avoid infinite loops
-                        if (visited.contains(succ)) {
-                            continue;
-                        }
-                        
-                        // Count this successor
-                        reachCount.put(succ, reachCount.getOrDefault(succ, 0) + 1);
-                        
-                        // Continue traversing
-                        queue.add(succ);
                     }
                 }
             }
             
             // Find the best merge node:
-            // - Prefer nodes reachable from most case bodies
-            // - Prefer nodes that are NOT outside the loop (if switch is in a loop)
-            int maxCount = 0;
-            int maxCountInLoop = 0;
-            Node bestInLoop = null;
-            Node bestOverall = null;
+            // Priority 1: Node with most direct successors (at least 2)
+            // Priority 2: Node with most indirect successors (at least 2)
+            Node mergeNode = null;
+            Node outerMergeNode = null;
+            int maxDirectCount = 0;
+            int maxIndirectCount = 0;
             
-            for (Map.Entry<Node, Integer> entry : reachCount.entrySet()) {
+            for (Map.Entry<Node, Integer> entry : directCount.entrySet()) {
                 Node candidate = entry.getKey();
                 int count = entry.getValue();
                 
-                // Skip loop headers
-                if (loopHeaders.contains(candidate)) continue;
-                
                 // Check if this node is inside the same loop as the switch
-                boolean isInLoop = false;
+                boolean isInLoop = true;
                 if (switchLoopHeader != null) {
                     Set<Node> loopReachable = getReachableNodes(switchLoopHeader);
                     isInLoop = loopReachable.contains(candidate) && 
                                getReachableNodes(candidate).contains(switchLoopHeader);
                 }
                 
-                if (isInLoop && count > maxCountInLoop) {
-                    maxCountInLoop = count;
-                    bestInLoop = candidate;
-                }
-                
-                if (count > maxCount) {
-                    maxCount = count;
-                    bestOverall = candidate;
+                if (isInLoop && count >= 2 && count > maxDirectCount) {
+                    maxDirectCount = count;
+                    mergeNode = candidate;
                 }
             }
             
-            // Prefer a merge node inside the loop if available
-            mergeNode = (bestInLoop != null) ? bestInLoop : bestOverall;
+            // If we found a merge node, look for an outer merge (where skipping cases go)
+            if (mergeNode != null) {
+                for (Map.Entry<Node, Integer> entry : indirectCount.entrySet()) {
+                    Node candidate = entry.getKey();
+                    int count = entry.getValue();
+                    
+                    // Check if this is reachable from the merge node
+                    Set<Node> mergeReachable = getReachableNodes(mergeNode);
+                    if (!mergeReachable.contains(candidate)) {
+                        continue;
+                    }
+                    
+                    // Check if this node is inside the same loop
+                    boolean isInLoop = true;
+                    if (switchLoopHeader != null) {
+                        Set<Node> loopReachable = getReachableNodes(switchLoopHeader);
+                        isInLoop = loopReachable.contains(candidate) && 
+                                   getReachableNodes(candidate).contains(switchLoopHeader);
+                    }
+                    
+                    if (isInLoop && count > maxIndirectCount) {
+                        maxIndirectCount = count;
+                        outerMergeNode = candidate;
+                    }
+                }
+                
+                // Also check if any direct successor is a potential outer merge
+                // (case bodies that skip the merge node entirely)
+                for (Map.Entry<Node, Integer> entry : directCount.entrySet()) {
+                    Node candidate = entry.getKey();
+                    if (candidate.equals(mergeNode)) continue;
+                    
+                    // Check if merge node leads to this candidate
+                    Set<Node> mergeReachable = getReachableNodes(mergeNode);
+                    if (mergeReachable.contains(candidate)) {
+                        boolean isInLoop = true;
+                        if (switchLoopHeader != null) {
+                            Set<Node> loopReachable = getReachableNodes(switchLoopHeader);
+                            isInLoop = loopReachable.contains(candidate) && 
+                                       getReachableNodes(candidate).contains(switchLoopHeader);
+                        }
+                        
+                        if (isInLoop && (outerMergeNode == null || entry.getValue() > maxIndirectCount)) {
+                            outerMergeNode = candidate;
+                        }
+                    }
+                }
+            }
+            
+            // Fallback: if no direct merge found, use indirect
+            if (mergeNode == null) {
+                for (Map.Entry<Node, Integer> entry : indirectCount.entrySet()) {
+                    Node candidate = entry.getKey();
+                    int count = entry.getValue();
+                    
+                    boolean isInLoop = true;
+                    if (switchLoopHeader != null) {
+                        Set<Node> loopReachable = getReachableNodes(switchLoopHeader);
+                        isInLoop = loopReachable.contains(candidate) && 
+                                   getReachableNodes(candidate).contains(switchLoopHeader);
+                    }
+                    
+                    if (isInLoop && count > maxIndirectCount) {
+                        maxIndirectCount = count;
+                        mergeNode = candidate;
+                    }
+                }
+            }
             
             if (mergeNode == null) {
                 continue;
             }
             
-            // Second pass: build cases with merged conditions and fall-through detection
+            // Second pass: build cases with merged conditions, fall-through, and skip detection
             List<SwitchCase> cases = new ArrayList<>();
             
             for (int i = 0; i < conditionChain.size(); i++) {
@@ -5214,28 +5328,70 @@ public class StructureDetector {
                 // In that case, add a label-only case (no body, no break)
                 if (i + 1 < conditionChain.size() && caseBodies.get(i + 1).equals(body)) {
                     // This is a label-only merged case
-                    cases.add(new SwitchCase(cond, negated, null, false, false));
+                    cases.add(new SwitchCase(cond, negated, null, false, false, false));
                 } else {
-                    // Check if this case body falls through to the next case body
+                    // Check if this case body falls through to the next case body or default
                     boolean hasFallThrough = false;
-                    if (i + 1 < conditionChain.size()) {
-                        Node nextBody = caseBodies.get(i + 1);
-                        // Check if this case body leads to the next case body (fall-through)
+                    Node nextTarget = (i + 1 < conditionChain.size()) ? caseBodies.get(i + 1) : defaultBody;
+                    
+                    // Check direct fall-through
+                    for (Node succ : body.succs) {
+                        if (succ.equals(nextTarget)) {
+                            hasFallThrough = true;
+                            break;
+                        }
+                    }
+                    
+                    // Check indirect fall-through via intermediate nodes (for case bodies with conditionals)
+                    if (!hasFallThrough && nextTarget != null) {
+                        Set<Node> visited = new HashSet<>();
+                        Queue<Node> queue = new LinkedList<>();
+                        queue.add(body);
+                        while (!queue.isEmpty() && !hasFallThrough) {
+                            Node current = queue.poll();
+                            if (visited.contains(current)) continue;
+                            visited.add(current);
+                            
+                            for (Node succ : current.succs) {
+                                if (succ.equals(nextTarget)) {
+                                    hasFallThrough = true;
+                                    break;
+                                }
+                                // Don't traverse through merge or outer merge
+                                if (succ.equals(mergeNode) || succ.equals(outerMergeNode) ||
+                                    conditionChain.contains(succ) || allCaseBodies.contains(succ)) {
+                                    continue;
+                                }
+                                queue.add(succ);
+                            }
+                        }
+                    }
+                    
+                    // Check if this case body skips the merge node (goes directly to outer merge)
+                    boolean skipsMerge = false;
+                    if (outerMergeNode != null) {
                         for (Node succ : body.succs) {
-                            if (succ.equals(nextBody)) {
-                                hasFallThrough = true;
+                            if (succ.equals(outerMergeNode)) {
+                                skipsMerge = true;
                                 break;
                             }
                         }
                     }
                     
                     // Add case with body
-                    cases.add(new SwitchCase(cond, negated, body, false, !hasFallThrough));
+                    cases.add(new SwitchCase(cond, negated, body, false, !hasFallThrough, skipsMerge));
                 }
             }
             
-            // Add default case
-            cases.add(new SwitchCase(null, false, defaultBody, true, true));
+            // Add default case - check if it falls through to merge (no break needed)
+            boolean defaultHasBreak = true;
+            for (Node succ : defaultBody.succs) {
+                if (succ.equals(mergeNode)) {
+                    defaultHasBreak = false;
+                    break;
+                }
+            }
+            cases.add(new SwitchCase(null, false, defaultBody, true, defaultHasBreak, false));
             
             // Mark all condition nodes AND case body nodes as processed
             for (int i = 0; i < conditionChain.size(); i++) {
@@ -5244,7 +5400,7 @@ public class StructureDetector {
             }
             processedNodes.add(defaultBody);
             
-            switches.add(new SwitchStructure(startCond, cases, mergeNode));
+            switches.add(new SwitchStructure(startCond, cases, mergeNode, outerMergeNode));
         }
         
         return switches;
