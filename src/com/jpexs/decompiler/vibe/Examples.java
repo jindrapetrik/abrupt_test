@@ -1382,5 +1382,73 @@ public class Examples {
         loc00c0;
         loc00c1;
         */
+        
+        // Example 28: Loop with switch and labeled block break
+        System.out.println();
+        runExample("Example 28: Loop with switch and labeled block break",
+            "digraph pcode {\n" +
+            "  start -> loc0000;\n" +
+            "  loc0065 -> loc00b6;\n" +
+            "  loc0065 -> loc0081;\n" +
+            "  loc00f1 -> loc00f7;\n" +
+            "  loc00f7 -> loc00fd;\n" +
+            "  loc00fd -> loc0103;\n" +
+            "  loc0103 -> loc0050;\n" +
+            "  loc0081 -> loc00c1;\n" +
+            "  loc0081 -> loc0091;\n" +
+            "  loc0091 -> loc00cc;\n" +
+            "  loc0091 -> loc00a1;\n" +
+            "  loc0112 -> loc0113;\n" +
+            "  loc00a1 -> loc00d7;\n" +
+            "  loc00a1 -> loc00f7;\n" +
+            "  loc00b6 -> loc0103;\n" +
+            "  loc00c1 -> loc00fd;\n" +
+            "  loc0000 -> loc0050;\n" +
+            "  loc00cc -> loc00fd;\n" +
+            "  loc00d7 -> loc00f1;\n" +
+            "  loc00d7 -> loc0103;\n" +
+            "  loc0050 -> loc0112;\n" +
+            "  loc0050 -> loc0065;\n" +
+            "  loc0065[_operator=\"===\"];\n" +
+            "  loc0081[_operator=\"===\"];\n" +
+            "  loc0091[_operator=\"===\"];\n" +
+            "  loc00a1[_operator=\"===\"];\n" +
+            "}"
+        );
+        /*
+        Expected output:
+        
+        start;
+        loc0000;
+        while(true) {
+            if (loc0050) {
+                break;
+            }
+            block_1: {
+                switch {
+                    case loc0065:
+                        loc00b6;
+                        break block_1;
+                    case loc0081:
+                        loc00c1;
+                        break;
+                    case loc0091:
+                        loc00cc;
+                        break; 
+                    case loc00a1:
+                        if (!loc00d7) {
+                            break block_1;
+                        }
+                        loc00f1;                
+                    default:
+                        loc00f7 
+                }
+                loc00fd;
+            }
+            loc0103;
+        }
+        loc0112;
+        loc0113;
+        */
     }
 }
