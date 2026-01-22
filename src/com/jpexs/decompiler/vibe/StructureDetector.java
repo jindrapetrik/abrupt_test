@@ -3680,7 +3680,6 @@ public class StructureDetector {
                 loopBody.add(new IfStatement(node, !exitOnTrueBranch, breakBody));
             } else if (node.succs.size() == 2 && secondContinue != null) {
                 // Both branches are inside the loop - generate if-else for the header condition
-                // The header becomes an if condition: if (!cond) { falseBranch } then trueBranch
                 // First edge is true branch, second edge is false branch
                 Node trueBranch = node.succs.get(0);
                 Node falseBranch = node.succs.get(1);
@@ -3688,19 +3687,44 @@ public class StructureDetector {
                 Set<Node> loopVisited = new HashSet<>();
                 loopVisited.add(node); // Don't revisit header
                 
-                // Generate the false branch content (inside if (!cond) { ... })
-                // Use trueBranch as stopAt since both branches converge there
-                Set<Node> falseVisited = new HashSet<>(loopVisited);
-                List<Statement> falseBody = generateStatementsInLoop(falseBranch, falseVisited, loopHeaders, ifConditions, labeledBreakEdges, blockStarts, loopsNeedingLabels, loop, currentBlock, trueBranch, switchStarts);
+                // Check if the loop header has an IfStructure with a merge node inside the loop
+                IfStructure headerIfStruct = ifConditions.get(node);
+                Node mergeNode = (headerIfStruct != null && headerIfStruct.mergeNode != null && 
+                                  loop.body.contains(headerIfStruct.mergeNode)) ? headerIfStruct.mergeNode : null;
                 
-                // Only create if statement if false branch has content
-                if (!falseBody.isEmpty()) {
-                    loopBody.add(new IfStatement(node, true, falseBody)); // negated condition
+                if (mergeNode != null) {
+                    // Both branches merge at a common node inside the loop
+                    // Generate proper if-else: if (!cond) { falseBranch } else { trueBranch } then mergeNode
+                    Set<Node> falseVisited = new HashSet<>(loopVisited);
+                    List<Statement> falseBody = generateStatementsInLoop(falseBranch, falseVisited, loopHeaders, ifConditions, labeledBreakEdges, blockStarts, loopsNeedingLabels, loop, currentBlock, mergeNode, switchStarts);
+                    
+                    Set<Node> trueVisited = new HashSet<>(loopVisited);
+                    List<Statement> trueBody = generateStatementsInLoop(trueBranch, trueVisited, loopHeaders, ifConditions, labeledBreakEdges, blockStarts, loopsNeedingLabels, loop, currentBlock, mergeNode, switchStarts);
+                    
+                    // Generate if-else structure
+                    loopBody.add(new IfStatement(node, true, falseBody, trueBody)); // negated condition
+                    
+                    // Continue with the merge node
+                    loopVisited.addAll(falseVisited);
+                    loopVisited.addAll(trueVisited);
+                    loopBody.addAll(generateStatementsInLoop(mergeNode, loopVisited, loopHeaders, ifConditions, labeledBreakEdges, blockStarts, loopsNeedingLabels, loop, currentBlock, switchStarts));
+                } else {
+                    // No merge node - use original behavior
+                    // The header becomes an if condition: if (!cond) { falseBranch } then trueBranch
+                    // Generate the false branch content (inside if (!cond) { ... })
+                    // Use trueBranch as stopAt since both branches converge there
+                    Set<Node> falseVisited = new HashSet<>(loopVisited);
+                    List<Statement> falseBody = generateStatementsInLoop(falseBranch, falseVisited, loopHeaders, ifConditions, labeledBreakEdges, blockStarts, loopsNeedingLabels, loop, currentBlock, trueBranch, switchStarts);
+                    
+                    // Only create if statement if false branch has content
+                    if (!falseBody.isEmpty()) {
+                        loopBody.add(new IfStatement(node, true, falseBody)); // negated condition
+                    }
+                    
+                    // Generate the true branch content (after the if)
+                    loopVisited.addAll(falseVisited);
+                    loopBody.addAll(generateStatementsInLoop(trueBranch, loopVisited, loopHeaders, ifConditions, labeledBreakEdges, blockStarts, loopsNeedingLabels, loop, currentBlock, switchStarts));
                 }
-                
-                // Generate the true branch content (after the if)
-                loopVisited.addAll(falseVisited);
-                loopBody.addAll(generateStatementsInLoop(trueBranch, loopVisited, loopHeaders, ifConditions, labeledBreakEdges, blockStarts, loopsNeedingLabels, loop, currentBlock, switchStarts));
                 
                 // Determine loop label - always get loopLabelId, but only show label if needed
                 String loopLabel = loopsNeedingLabels.contains(node) ? getLoopLabel(node) : null;
@@ -4223,7 +4247,18 @@ public class StructureDetector {
                     
                     // A) If true branch is continue (loop header) and false branch is break, negate condition
                     if (trueBranchIsLoopHeader && falseBranchTarget != null) {
-                        List<Node> falsePath = findPathToTarget(ifStruct.falseBranch, falseBranchTarget.target, ifConditions);
+                        // Check if false branch goes directly to a break target that will be output after the loop
+                        // In this case, we should just output "break;" without any intermediate nodes
+                        Node commonBreakTarget = findCommonBreakTarget(currentLoop);
+                        boolean falseIsDirect = commonBreakTarget != null && ifStruct.falseBranch.equals(commonBreakTarget);
+                        
+                        List<Node> falsePath;
+                        if (falseIsDirect) {
+                            // False branch goes directly to the common break target - no path needed
+                            falsePath = new ArrayList<>();
+                        } else {
+                            falsePath = findPathToTarget(ifStruct.falseBranch, falseBranchTarget.target, ifConditions);
+                        }
                         List<Statement> breakBody = outputPathAndBreakStatements(falsePath, falseBranchTarget.breakLabel, falseBranchTarget.breakLabelId, currentLoop, currentBlock, falseBranchTarget.target);
                         result.add(new IfStatement(node, true, breakBody));
                         return result;
