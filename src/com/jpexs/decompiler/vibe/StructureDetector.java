@@ -3865,10 +3865,17 @@ public class StructureDetector {
             
             if (needsOuterBlock) {
                 // Check if there's already a labeled block that matches
-                LabeledBlockStructure existingBlock = blockStarts.get(node);
-                if (existingBlock != null && existingBlock.endNode.equals(switchStruct.outerMergeNode)) {
-                    outerBlockLabel = getBlockLabel(existingBlock.label);
-                    outerBlockLabelId = getBlockLabelId(existingBlock.label);
+                LabeledBlockStructure existingBlock = null;
+                for (LabeledBlockStructure block : labeledBlocks) {
+                    if (block.startNode.equals(node) && block.endNode.equals(switchStruct.outerMergeNode)) {
+                        existingBlock = block;
+                        break;
+                    }
+                }
+                if (existingBlock != null) {
+                    // Use the existing block's label and ID directly
+                    outerBlockLabel = existingBlock.label;
+                    outerBlockLabelId = existingBlock.labelId;
                 } else {
                     outerBlockLabelId = globalLabelCounter++;
                     outerBlockLabel = "block_" + outerBlockLabelId;
@@ -3901,20 +3908,49 @@ public class StructureDetector {
                 if (sc.caseBody != null) {
                     Set<Node> caseVisited = new HashSet<>();
                     // Determine stop node based on case type
+                    // For fall-through cases (hasBreak=false), always use next case body as stop
+                    // Even if skipsMerge is true - the skip is handled internally, case still falls through
                     Node stopNode;
-                    if (sc.skipsMerge && needsOuterBlock) {
-                        stopNode = switchStruct.outerMergeNode;
-                    } else if (sc.hasBreak) {
-                        stopNode = switchStruct.mergeNode;
-                    } else {
+                    if (!sc.hasBreak) {
                         // Fall-through case - stop at next case body or merge
                         stopNode = caseBodyToNextBody.get(sc.caseBody);
                         if (stopNode == null) {
                             stopNode = switchStruct.mergeNode;
                         }
+                    } else if (sc.skipsMerge && needsOuterBlock) {
+                        stopNode = switchStruct.outerMergeNode;
+                    } else {
+                        stopNode = switchStruct.mergeNode;
                     }
-                    List<Statement> bodyStatements = generateStatementsInLoop(sc.caseBody, caseVisited, loopHeaders, ifConditions, labeledBreakEdges, blockStarts, loopsNeedingLabels, currentLoop, currentBlock, stopNode, switchStarts);
-                    caseBody.addAll(bodyStatements);
+                    
+                    // Special handling for fall-through cases with conditional body that can skip to outer merge
+                    // Check if the case body is a conditional where one branch goes to outer merge
+                    IfStructure caseBodyIf = ifConditions.get(sc.caseBody);
+                    boolean needsSpecialSkipHandling = !sc.hasBreak && needsOuterBlock && 
+                                                       caseBodyIf != null &&
+                                                       (caseBodyIf.falseBranch.equals(switchStruct.outerMergeNode) ||
+                                                        caseBodyIf.trueBranch.equals(switchStruct.outerMergeNode));
+                    
+                    if (needsSpecialSkipHandling) {
+                        // Generate: if (condition is skip) { break block } else_content
+                        boolean skipOnTrue = caseBodyIf.trueBranch.equals(switchStruct.outerMergeNode);
+                        
+                        // Generate the break-to-outer-block if statement
+                        List<Statement> breakBody = new ArrayList<>();
+                        breakBody.add(new BreakStatement(outerBlockLabel, outerBlockLabelId));
+                        // If skip is on true branch, negate condition (if !cond { break })
+                        // If skip is on false branch, use condition as-is (if cond { break })
+                        caseBody.add(new IfStatement(sc.caseBody, !skipOnTrue, breakBody));
+                        
+                        // Generate the continuation path (the non-skip branch)
+                        Node continuationNode = skipOnTrue ? caseBodyIf.falseBranch : caseBodyIf.trueBranch;
+                        caseVisited.add(sc.caseBody);
+                        List<Statement> continuationStatements = generateStatementsInLoop(continuationNode, caseVisited, loopHeaders, ifConditions, labeledBreakEdges, blockStarts, loopsNeedingLabels, currentLoop, currentBlock, stopNode, switchStarts);
+                        caseBody.addAll(continuationStatements);
+                    } else {
+                        List<Statement> bodyStatements = generateStatementsInLoop(sc.caseBody, caseVisited, loopHeaders, ifConditions, labeledBreakEdges, blockStarts, loopsNeedingLabels, currentLoop, currentBlock, stopNode, switchStarts);
+                        caseBody.addAll(bodyStatements);
+                    }
                 }
                 
                 // Add break statement based on case type
