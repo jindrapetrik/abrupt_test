@@ -559,8 +559,7 @@ public class Examples {
                 case4;
                 break;
             default:
-                d;
-                break;
+                d;                
         }
         end;
          */
@@ -622,8 +621,7 @@ public class Examples {
                 case45;
                 break;
             default:
-                d;
-                break;
+                d;                
         }
         end;
         */
@@ -707,8 +705,7 @@ public class Examples {
                     case45;
                     break;
                 default:
-                    d;
-                    break;
+                    d;                    
             }
             sw_end;
         }
@@ -961,8 +958,7 @@ public class Examples {
                 case4;
                 break;
             default:
-                d;
-                break;
+                d;                
         }
         end;
         */
