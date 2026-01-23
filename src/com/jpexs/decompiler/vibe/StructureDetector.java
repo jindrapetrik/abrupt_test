@@ -1029,6 +1029,19 @@ public class StructureDetector {
     }
 
     /**
+     * Checks if a node directly reaches (is a direct successor of) another node.
+     */
+    private boolean nodeDirectlyReaches(Node from, Node to) {
+        if (from == null || to == null) return false;
+        for (Node succ : from.succs) {
+            if (succ.equals(to)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
      * Detects all loop structures in the CFG using back-edge detection.
      * A back-edge is an edge from a node to one of its dominators,
      * indicating a loop.
@@ -5733,15 +5746,6 @@ public class StructureDetector {
             // Also detect where default should be inserted (when case body equals default body)
             List<SwitchCase> cases = new ArrayList<>();
             boolean defaultInserted = false;
-            int defaultInsertPosition = -1; // Position where default should be inserted
-            
-            // First, find if any case body equals default body
-            for (int i = 0; i < caseBodies.size(); i++) {
-                if (caseBodies.get(i).equals(defaultBody)) {
-                    defaultInsertPosition = i;
-                    break;
-                }
-            }
             
             for (int i = 0; i < conditionChain.size(); i++) {
                 Node cond = conditionChain.get(i);
@@ -5750,37 +5754,37 @@ public class StructureDetector {
                 
                 // Check if this case body equals the default body
                 // In that case, add a label-only case and insert default right after
+                // Note: if multiple cases share the default body, all of them become label-only
+                // and default is inserted after the first one
                 if (body.equals(defaultBody)) {
                     // This case shares body with default - add label-only case
                     cases.add(new SwitchCase(cond, negated, null, false, false, false));
                     
-                    // Insert default here with the shared body
-                    // Check if default falls through to next case body
-                    boolean defaultFallsThrough = false;
-                    Node nextCaseBody = (i + 1 < caseBodies.size()) ? caseBodies.get(i + 1) : null;
-                    
-                    if (nextCaseBody != null) {
-                        // Check if default body leads to next case body
-                        for (Node succ : defaultBody.succs) {
-                            if (succ.equals(nextCaseBody)) {
-                                defaultFallsThrough = true;
-                                break;
+                    // Only insert default once (after the first case that shares its body)
+                    if (!defaultInserted) {
+                        // Insert default here with the shared body
+                        // Check if default falls through to next case body or merge
+                        boolean defaultFallsThrough = false;
+                        Node nextCaseBody = (i + 1 < caseBodies.size()) ? caseBodies.get(i + 1) : null;
+                        
+                        if (nextCaseBody != null) {
+                            // Check if default body leads to next case body
+                            for (Node succ : defaultBody.succs) {
+                                if (succ.equals(nextCaseBody)) {
+                                    defaultFallsThrough = true;
+                                    break;
+                                }
                             }
                         }
-                    }
-                    
-                    // If not falling through to next case, check if it falls through to merge
-                    if (!defaultFallsThrough) {
-                        for (Node succ : defaultBody.succs) {
-                            if (succ.equals(mergeNode)) {
-                                defaultFallsThrough = true;
-                                break;
-                            }
+                        
+                        // If not falling through to next case, check if it falls through to merge
+                        if (!defaultFallsThrough) {
+                            defaultFallsThrough = nodeDirectlyReaches(defaultBody, mergeNode);
                         }
+                        
+                        cases.add(new SwitchCase(null, false, defaultBody, true, !defaultFallsThrough, false));
+                        defaultInserted = true;
                     }
-                    
-                    cases.add(new SwitchCase(null, false, defaultBody, true, !defaultFallsThrough, false));
-                    defaultInserted = true;
                     continue;
                 }
                 
@@ -5796,7 +5800,7 @@ public class StructureDetector {
                     
                     // If default was already inserted, next target is next case body (or merge)
                     // Otherwise, default is still at the end, so fall through to next case or default
-                    if (defaultInserted || (defaultInsertPosition >= 0 && i >= defaultInsertPosition)) {
+                    if (defaultInserted) {
                         nextTarget = (i + 1 < conditionChain.size()) ? caseBodies.get(i + 1) : mergeNode;
                     } else {
                         nextTarget = (i + 1 < conditionChain.size()) ? caseBodies.get(i + 1) : defaultBody;
@@ -5855,14 +5859,8 @@ public class StructureDetector {
             
             // Add default case at the end if not already inserted
             if (!defaultInserted) {
-                boolean defaultHasBreak = true;
-                for (Node succ : defaultBody.succs) {
-                    if (succ.equals(mergeNode)) {
-                        defaultHasBreak = false;
-                        break;
-                    }
-                }
-                cases.add(new SwitchCase(null, false, defaultBody, true, defaultHasBreak, false));
+                boolean defaultFallsThrough = nodeDirectlyReaches(defaultBody, mergeNode);
+                cases.add(new SwitchCase(null, false, defaultBody, true, !defaultFallsThrough, false));
             }
             
             // Mark all condition nodes AND case body nodes as processed
