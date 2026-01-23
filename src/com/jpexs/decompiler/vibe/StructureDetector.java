@@ -3769,14 +3769,25 @@ public class StructureDetector {
                 }
             }
             
-            for (SwitchCase sc : switchStruct.cases) {
+            for (int i = 0; i < switchStruct.cases.size(); i++) {
+                SwitchCase sc = switchStruct.cases.get(i);
+                boolean isLastCase = (i == switchStruct.cases.size() - 1);
                 List<Statement> caseBody = new ArrayList<>();
                 
                 // Generate full case body content (not just the label)
                 if (sc.caseBody != null) {
                     Set<Node> caseVisited = new HashSet<>();
                     // Stop at the merge node or the next case body (for fall-through)
-                    Node stopNode = sc.hasBreak ? switchStruct.mergeNode : caseBodyToNextBody.get(sc.caseBody);
+                    Node stopNode;
+                    if (sc.hasBreak) {
+                        stopNode = switchStruct.mergeNode;
+                    } else {
+                        // Fall-through case: stop at next case body, or merge node for last case
+                        stopNode = caseBodyToNextBody.get(sc.caseBody);
+                        if (stopNode == null) {
+                            stopNode = switchStruct.mergeNode;
+                        }
+                    }
                     List<Statement> bodyStatements = generateStatements(sc.caseBody, caseVisited, loopHeaders, ifConditions, blockStarts, labeledBreakEdges, loopsNeedingLabels, currentLoop, currentBlock, stopNode, switchStarts);
                     
                     // If we have a switch label, replace block breaks with switch breaks
@@ -3788,7 +3799,8 @@ public class StructureDetector {
                 }
                 
                 // Add break statement only if this case has a break
-                if (sc.hasBreak) {
+                // Don't add break for the last case - it naturally falls through to the switch end
+                if (sc.hasBreak && !isLastCase) {
                     caseBody.add(new BreakStatement(switchLabelId));
                 }
                 
@@ -4205,7 +4217,9 @@ public class StructureDetector {
                 }
             }
             
-            for (SwitchCase sc : switchStruct.cases) {
+            for (int i = 0; i < switchStruct.cases.size(); i++) {
+                SwitchCase sc = switchStruct.cases.get(i);
+                boolean isLastCase = (i == switchStruct.cases.size() - 1);
                 List<Statement> caseBody = new ArrayList<>();
                 
                 // Generate full case body content
@@ -4258,7 +4272,8 @@ public class StructureDetector {
                 }
                 
                 // Add break statement based on case type
-                if (sc.hasBreak) {
+                // Don't add break for the last case - it naturally falls through to the switch end
+                if (sc.hasBreak && !isLastCase) {
                     if (sc.skipsMerge && needsOuterBlock) {
                         // Case skips merge - use labeled break to outer block
                         caseBody.add(new BreakStatement(outerBlockLabel, outerBlockLabelId));
