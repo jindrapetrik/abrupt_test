@@ -601,27 +601,26 @@ public class Examples {
         Expected output:
         
         start;
-        switch {
-            case if1:
-                case1;
-                if (!n) {
-                    b;
+        block_0: {
+            if (!if1) {
+                if (!if2) {
+                    if (!if3) {
+                        if (!if4) {
+                            if (!if5) {
+                                d;
+                                break;
+                            }
+                        }
+                        case45;
+                        break;
+                    }
                 } else {
-                    a;
+                    case2;
                 }
-                c;
-                break;
-            case if2:
-                case2;
-            case if3:
                 case3;
-                break;
-            case if4:
-            case if5:
-                case45;
-                break;
-            default:
-                d;                
+            } else {
+                case1;
+            }
         }
         end;
         */

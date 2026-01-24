@@ -2277,7 +2277,7 @@ public class StructureDetector {
         
         // Automatically detect switch structures
         switchStructures.clear();
-        switchStructures.addAll(detectSwitches(ifs));
+        //switchStructures.addAll(detectSwitches(ifs));
         
         // Detect return block FIRST so it gets block_0 if needed
         // This ensures the outermost block gets the lowest number
