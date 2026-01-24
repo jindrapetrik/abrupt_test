@@ -1043,6 +1043,41 @@ public class Examples {
         Expected output:
         
         start;
+        block_0: {
+            if (!if1) {
+                if (!if2) {
+                    if (!if3) {
+                        if (!if4) {
+                            d;
+                        } else {
+                            case4;
+                        }
+                    } else {
+                        case3;
+                    }
+                } else {
+                    case2;
+                    while(true) {
+                        if (h) {
+                            break;
+                        }
+                        if (g) {
+                            break block_0;
+                        }
+                    }
+                    i;
+                }
+            } else {
+                case1;
+            }
+        }
+        end;
+        */
+        
+        /*
+        Code with switches:
+        
+        start;
         loop_0:switch {
             case if1:
                 case1;
