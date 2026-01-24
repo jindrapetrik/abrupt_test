@@ -620,6 +620,12 @@ public class Examples {
                 case3;
             } else {
                 case1;
+                if (!n) {
+                    b;
+                } else {
+                    a;
+                }
+                c;
             }
         }
         end;
