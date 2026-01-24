@@ -4533,6 +4533,13 @@ public class StructureDetector {
                 labeledBreak = null; // Treat as regular node
             }
         }
+        // Skip labeled break if target is INSIDE the current block's body (not the end node).
+        // This handles cases where a labeled break was detected for a different block configuration,
+        // but we're processing within a block where the target is an internal node, not the exit.
+        if (labeledBreak != null && currentBlock != null && 
+            currentBlock.body.contains(labeledBreak.to) && !labeledBreak.to.equals(currentBlock.endNode)) {
+            labeledBreak = null; // Treat as regular node, not a block exit
+        }
         if (labeledBreak != null) {
             IfStructure ifStruct = ifConditions.get(node);
             if (ifStruct != null) {
@@ -5031,6 +5038,20 @@ public class StructureDetector {
             BranchTargetResult trueBranchTarget = findBranchTarget(ifStruct.trueBranch, currentLoop, ifConditions, loopHeaders);
             BranchTargetResult falseBranchTarget = findBranchTarget(ifStruct.falseBranch, currentLoop, ifConditions, loopHeaders);
             
+            // If a branch target is a "labeled block break" but the target is INSIDE the current block,
+            // it's not really a break - it's just normal control flow within the block.
+            // This happens when there are nested/overlapping block definitions.
+            if (trueBranchTarget != null && trueBranchTarget.isLabeledBlockBreak && currentBlock != null) {
+                if (currentBlock.body.contains(trueBranchTarget.target) && !trueBranchTarget.target.equals(currentBlock.endNode)) {
+                    trueBranchTarget = null; // Not a real break, just internal flow
+                }
+            }
+            if (falseBranchTarget != null && falseBranchTarget.isLabeledBlockBreak && currentBlock != null) {
+                if (currentBlock.body.contains(falseBranchTarget.target) && !falseBranchTarget.target.equals(currentBlock.endNode)) {
+                    falseBranchTarget = null; // Not a real break, just internal flow
+                }
+            }
+            
             // Special case: if both branches merge at the same node inside the loop,
             // and neither branch is empty, treat as a standard if-else
             // This prevents detecting "continue" when both branches naturally converge
@@ -5095,6 +5116,47 @@ public class StructureDetector {
                     result.addAll(generateStatementsInLoop(ifStruct.mergeNode, mergeVisited, loopHeaders, ifConditions, labeledBreakEdges, blockStarts, loopsNeedingLabels, currentLoop, currentBlock, stopAt, switchStarts));
                 }
                 return result;
+            }
+            
+            // Special case for nested if-chains inside labeled blocks:
+            // When false branch contains another if condition (continuation of chain),
+            // and there's a merge node where both branches converge,
+            // use negated condition with else for true branch.
+            // This produces: if (!cond) { nested_ifs } else { true_content } merge;
+            if (currentBlock != null && ifStruct.mergeNode != null && 
+                (currentBlock.body.contains(ifStruct.mergeNode) || ifStruct.mergeNode.equals(currentBlock.endNode))) {
+                
+                // Check if false branch is another if condition (continuation of chain)
+                IfStructure falseIfStruct = ifConditions.get(ifStruct.falseBranch);
+                if (falseIfStruct != null) {
+                    // False branch is an if - generate nested structure
+                    Set<Node> falseVisited = new HashSet<>(visited);
+                    List<Statement> onFalse = generateStatementsInLoop(ifStruct.falseBranch, falseVisited, loopHeaders, ifConditions, 
+                                              labeledBreakEdges, blockStarts, loopsNeedingLabels, currentLoop, currentBlock, ifStruct.mergeNode, switchStarts);
+                    
+                    // Check if true branch goes directly to the stopAt (outer merge)
+                    // If so, don't generate else clause - let stopAt handling process it
+                    if (ifStruct.trueBranch.equals(stopAt)) {
+                        // Generate: if (!cond) { false_branch } // no else, true branch is stopAt
+                        result.add(new IfStatement(node, true, onFalse));  // negated condition, no else
+                        // Don't process merge here - let outer handling do it
+                    } else {
+                        // Generate: if (!cond) { false_branch } else { true_branch }
+                        Set<Node> trueVisited = new HashSet<>(visited);
+                        List<Statement> onTrue = generateStatementsInLoop(ifStruct.trueBranch, trueVisited, loopHeaders, ifConditions, 
+                                                  labeledBreakEdges, blockStarts, loopsNeedingLabels, currentLoop, currentBlock, ifStruct.mergeNode, switchStarts);
+                        
+                        result.add(new IfStatement(node, true, onFalse, onTrue));  // negated condition
+                        
+                        // Continue with merge node
+                        Set<Node> mergeVisited = new HashSet<>(visited);
+                        mergeVisited.addAll(falseVisited);
+                        mergeVisited.addAll(trueVisited);
+                        result.addAll(generateStatementsInLoop(ifStruct.mergeNode, mergeVisited, loopHeaders, ifConditions, 
+                                      labeledBreakEdges, blockStarts, loopsNeedingLabels, currentLoop, currentBlock, stopAt, switchStarts));
+                    }
+                    return result;
+                }
             }
             
             // B) If true branch ends with break/continue, flatten the else
